@@ -37,7 +37,7 @@ fn main() -> ! {
     std::thread::spawn(move || {
         // init altitude to a fairly negative value so that we get a nice welcome sound as the
         // current altitude moves to the actual measured value
-        let mut old_altitude_m = -50.0;
+        let mut old_altitude_m = -100.0;
         let mut old_altitude_change_ms = 0.0;
         let mut last_measure_time = std::time::Instant::now();
 
@@ -98,12 +98,12 @@ fn main() -> ! {
             std::thread::sleep(duration);
         }
 
-        std::thread::sleep(std::time::Duration::from_millis(40));
+        std::thread::sleep(std::time::Duration::from_millis(50));
     }
 }
 
 fn altitude_change_to_freq(altitude_change_mms: i32) -> Option<Hertz> {
-    if altitude_change_mms > -1800 && altitude_change_mms < 400 {
+    if altitude_change_mms > -1800 && altitude_change_mms < 500 {
         None
     } else {
         Some(
