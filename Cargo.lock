@@ -81,6 +81,8 @@ checksum = "bef38d45163c2f1dde094a7dfd33ccf595c92905c8f8f4fdc18d06fb1037718a"
 [[package]]
 name = "bme280"
 version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "32c139eaf2284d0c91a25f61d84dd326444cace86cb0371f45d71d2d055ba432"
 dependencies = [
  "embedded-hal 0.2.7",
 ]

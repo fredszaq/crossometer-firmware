@@ -53,7 +53,7 @@ fn main() -> ! {
             let elapsed = (measure_time - last_measure_time).as_secs_f64();
             // apply a bit of smoothing on the data
             let altitude_change_ms =
-                old_altitude_change_ms * 0.7 + 0.3 * ((altitude_m - old_altitude_m) / elapsed);
+                old_altitude_change_ms * 0.8 + 0.2 * ((altitude_m - old_altitude_m) / elapsed);
 
             println!(
                 "measure_loop:{},{},{},{}",
@@ -98,18 +98,20 @@ fn main() -> ! {
             std::thread::sleep(duration);
         }
 
-        std::thread::sleep(std::time::Duration::from_millis(50));
+        let altitude_change_mms = current_altitude_change_mms.load(Ordering::SeqCst);
+        let duration = altitude_change_to_no_beep_duration(altitude_change_mms);
+        std::thread::sleep(duration);
     }
 }
 
 fn altitude_change_to_freq(altitude_change_mms: i32) -> Option<Hertz> {
-    if altitude_change_mms > -1800 && altitude_change_mms < 500 {
+    if altitude_change_mms > -3000 && altitude_change_mms < 555 {
         None
     } else {
         Some(
-            ((1200 + altitude_change_mms / 3)
-                .max(100) // ~ -3.3 m/s
-                .min(4000)// ~ +8.4m/s
+            ((2000 + altitude_change_mms / 3)
+                .max(90) // -5.7 m/s
+                .min(5000)// ~ +9m/s
                 as u32)
                 .Hz(),
         )
@@ -117,5 +119,9 @@ fn altitude_change_to_freq(altitude_change_mms: i32) -> Option<Hertz> {
 }
 
 fn altitude_change_to_beep_duration(altitude_change_mms: i32) -> Duration {
-    Duration::from_millis((150 - altitude_change_mms / 33).max(60).min(250) as u64)
+    Duration::from_millis((150 - altitude_change_mms / 33).max(60).min(400) as u64)
+}
+
+fn altitude_change_to_no_beep_duration(altitude_change_mms: i32) -> Duration {
+    Duration::from_millis((150 - altitude_change_mms / 33).max(60).min(400) as u64)
 }
