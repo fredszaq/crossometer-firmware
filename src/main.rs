@@ -1,10 +1,9 @@
 use bme280::spi::BME280;
-use chrono::Timelike;
-use embedded_hal::serial::Read;
 use esp_idf_hal::ledc::config::TimerConfig;
-use esp_idf_hal::ledc::{Channel, Timer};
+use esp_idf_hal::ledc::{LedcDriver, LedcTimerDriver};
 use esp_idf_hal::prelude::*;
-use esp_idf_hal::serial;
+use esp_idf_svc::hal::peripherals::Peripherals;
+use nmea_parser::chrono::Timelike;
 use nmea_parser::gnss::GgaData;
 use nmea_parser::ParsedMessage;
 use std::collections::VecDeque;
@@ -12,11 +11,13 @@ use std::sync::atomic::{AtomicI32, AtomicU8, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
-fn main() -> ! {
-    esp_idf_sys::link_patches();
-    esp_idf_svc::log::EspLogger::initialize_default();
+fn main() {
+    // It is necessary to call this function once. Otherwise some patches to the runtime
+    // implemented by esp-idf-sys might not link properly. See https://github.com/esp-rs/esp-idf-template/issues/71
+    esp_idf_svc::sys::link_patches();
 
-    esp_idf_svc::log::EspLogger.set_target_level("", log::LevelFilter::Trace);
+    // Bind the log crate to the ESP Logging facilities
+    esp_idf_svc::log::EspLogger::initialize_default();
 
     let peripherals = Peripherals::take().unwrap();
     let pins = peripherals.pins;
@@ -34,53 +35,31 @@ fn main() -> ! {
     let i2c_sda0 = pins.gpio21;
     let i2c_scl0 = pins.gpio22;
 
-    let i2c0 = esp_idf_hal::i2c::Master::new(
+    let i2c0 = esp_idf_hal::i2c::I2cDriver::new(
         peripherals.i2c0,
-        esp_idf_hal::i2c::MasterPins {
-            sda: i2c_sda0,
-            scl: i2c_scl0,
-        },
-        esp_idf_hal::i2c::config::MasterConfig::default().baudrate(100000.Hz()),
+        i2c_sda0,
+        i2c_scl0,
+        &esp_idf_hal::i2c::config::Config::new().baudrate(100000.Hz()),
     )
     .unwrap();
 
     use esp_idf_hal::spi;
-
     let config = <spi::config::Config as Default>::default().baudrate(9600.Hz().into());
 
-    let spi2 = spi::Master::<spi::SPI2, _, _, _, _>::new(
+    let spi2 = spi::SpiDriver::new(
         spi2,
-        spi::Pins {
-            sclk: spi2_sclk,
-            sdo: spi2_mosi,
-            sdi: Some(spi2_miso),
-            cs: Option::<esp_idf_hal::gpio::Gpio15<esp_idf_hal::gpio::Unknown>>::None,
-        },
-        config,
+        spi2_sclk,
+        spi2_mosi,
+        Some(spi2_miso),
+        &spi::SpiDriverConfig::new(),
     )
     .unwrap();
-    let cs_spi2 = spi2_cs.into_output().unwrap();
 
-    /*
-    let config = <spi::config::Config as Default>::default().baudrate(1000000.Hz().into());
+    let spi2device = spi::SpiDeviceDriver::new(spi2, Some(spi2_cs), &config).unwrap();
 
-        let spi3 = spi::Master::<spi::SPI3, _, _, _, _>::new(
-            peripherals.spi3,
-            spi::Pins {
-                sclk: pins.gpio18,
-                sdo: pins.gpio23,
-                sdi: Some(pins.gpio19),
-                cs: Option::<esp_idf_hal::gpio::Gpio21<esp_idf_hal::gpio::Unknown>>::None,
-            },
-            config,
-        )
-        .unwrap();
+    let mut bmp280 = BME280::new(spi2device).unwrap();
 
-        let cs_spi3 = pins.gpio5.into_output().unwrap();
-
-    */
-    let mut bmp280 = BME280::new(spi2, cs_spi2, esp_idf_hal::delay::FreeRtos).unwrap();
-    bmp280.init().unwrap();
+    bmp280.init(&mut esp_idf_hal::delay::FreeRtos).unwrap();
 
     let current_hours = Arc::new(AtomicU8::new(0));
     let current_minutes = Arc::new(AtomicU8::new(0));
@@ -109,7 +88,7 @@ fn main() -> ! {
         let mut sea_level_p = 101325.0;
 
         loop {
-            let measurements = bmp280.measure().unwrap();
+            let measurements = bmp280.measure(&mut esp_idf_hal::delay::FreeRtos).unwrap();
             let measure_time = std::time::Instant::now();
 
             if !calibrated {
@@ -189,7 +168,7 @@ fn main() -> ! {
             let mut gps_qual = None;
 
             loop {
-                display.clear();
+                display.clear_buffer();
 
                 if let Ok(qual) = gps_quality_rx.try_recv() {
                     gps_qual = Some(qual)
@@ -365,16 +344,14 @@ fn main() -> ! {
 
     std::thread::Builder::new()
         .spawn(move || {
-            let config = serial::config::Config::default().baudrate(9600.Hz());
-            let mut serial: serial::Serial<serial::UART2, _, _> = serial::Serial::new(
+            let config = esp_idf_hal::uart::UartConfig::new().baudrate(9600.Hz());
+            let serial = esp_idf_hal::uart::UartDriver::new(
                 uart_gps,
-                serial::Pins {
-                    tx: uart_gps_tx_pin,
-                    rx: uart_gps_rx_pin,
-                    cts: None,
-                    rts: None,
-                },
-                config,
+                uart_gps_tx_pin,
+                uart_gps_rx_pin,
+                Option::<esp_idf_hal::gpio::Gpio0>::None,
+                Option::<esp_idf_hal::gpio::Gpio0>::None,
+                &config,
             )
             .unwrap();
 
@@ -404,14 +381,17 @@ fn main() -> ! {
                 sentence_end = false;
 
                 while !sentence_end {
-                    match serial.read() {
-                        Ok(byte) => {
-                            buffer[buffer_len] = byte;
+                    let mut read_buffer = [0x0];
+                    match serial.read(&mut read_buffer, esp_idf_hal::delay::BLOCK) {
+                        Ok(0) => {
+                            // can this happen in real life ? we can probably remove this
+                            // leftover from esp_idf_hal 0.39 migration
+                            std::thread::sleep(Duration::from_millis(10));
+                        }
+                        Ok(_) => {
+                            buffer[buffer_len] = read_buffer[0];
                             sentence_end = buffer[buffer_len] as char == '\n';
                             buffer_len += 1;
-                        }
-                        Err(nb::Error::WouldBlock) => {
-                            std::thread::sleep(Duration::from_millis(10));
                         }
                         Err(e) => panic!("{:?}", e),
                     }
@@ -485,157 +465,6 @@ fn main() -> ! {
         })
         .unwrap();
 
-    /*
-    std::thread::Builder::new().stack_size(131072).spawn(||{
-
-    let config = serial::config::Config::default().baudrate(9600.Hz());
-    let mut serial: serial::Serial<serial::UART2, _, _> = serial::Serial::new(
-        uart_gps,
-        serial::Pins {
-            tx: uart_gps_tx_pin,
-            rx: uart_gps_rx_pin,
-            cts: None,
-            rts: None,
-        },
-        config,
-    )
-    .unwrap();
-
-
-    struct Clock;
-
-    impl embedded_sdmmc::TimeSource for Clock {
-        fn get_timestamp(&self) -> embedded_sdmmc::Timestamp {
-            embedded_sdmmc::Timestamp {
-                year_since_1970: 0,
-                zero_indexed_month: 0,
-                zero_indexed_day: 0,
-                hours: 0,
-                minutes: 0,
-                seconds: 0,
-            }
-        }
-    }
-
-    let mut sd_mmc_spi = embedded_sdmmc::SdMmcSpi::new(spi3, cs_spi3);
-    let mut sd_controller = embedded_sdmmc::Controller::new(sd_mmc_spi.acquire().unwrap(), Clock);
-
-    let mut volume = sd_controller
-        .get_volume(embedded_sdmmc::VolumeIdx(0))
-        .unwrap();
-    let root_dir = sd_controller.open_root_dir(&volume).unwrap();
-
-    let mut f = sd_controller
-        .open_file_in_dir(
-            &mut volume,
-            &root_dir,
-            "HELLO.GPX",
-            embedded_sdmmc::Mode::ReadWriteCreateOrAppend,
-        )
-        .unwrap();
-
-    sd_controller
-        .write(&mut volume, &mut f, b"\n#########\n")
-        .unwrap();
-
-    sd_controller
-        .write(
-            &mut volume,
-            &mut f,
-            br#"<?xml version="1.0" encoding="UTF-8" standalone="no" ?>"#,
-        )
-        .unwrap();
-
-    sd_controller
-            .write(&mut volume, &mut f, br#"<gpx xmlns="http://www.topografix.com/GPX/1/1" creator="open-sport-instrument" version="1.1"
-    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
-    xsi:schemaLocation="http://www.topografix.com/GPX/1/1 http://www.topografix.com/GPX/1/1/gpx.xsd">"#)
-            .unwrap();
-
-    let mut buffer = [0u8; 83]; // NMEA sentence is max 79 + 3 bytes in length
-    let mut buffer_len;
-    let mut sentence_end;
-    let mut parser = nmea_parser::NmeaParser::new();
-    loop {
-        buffer_len = 0;
-        sentence_end = false;
-
-        while !sentence_end {
-            match serial.read() {
-                Ok(byte) => {
-                    buffer[buffer_len] = byte;
-                    sentence_end = buffer[buffer_len] as char == '\n';
-                    buffer_len += 1;
-                }
-                Err(nb::Error::WouldBlock) => {
-                    std::thread::sleep(Duration::from_millis(10));
-                }
-                Err(e) => panic!("{:?}", e),
-            }
-        }
-
-        let sentence = String::from_utf8_lossy(&buffer[0..buffer_len]);
-        let sentence = sentence.trim();
-        let nmea = parser.parse_sentence(&sentence);
-
-        println!("{:?}  => {}", nmea.is_ok(), sentence,);
-        if let Ok(ParsedMessage::Rmc(data)) = nmea {
-            println!(
-                "{:?}  {:?}",
-                data.latitude.map(|it| it as f32),
-                data.longitude.map(|it| it as f32)
-            )
-        } else if let Ok(ParsedMessage::Gga(GgaData {
-            source,
-            timestamp: Some(timestamp),
-            latitude: Some(latitude),
-            longitude: Some(longitude),
-            quality,
-            satellite_count,
-            altitude: Some(altitude),
-            ..
-        })) = nmea
-        {
-            println!(
-                "source {:?} qual {:?} sat {:?}",
-                source, quality, satellite_count,
-            );
-
-            sd_controller
-                .write(
-                    &mut volume,
-                    &mut f,
-                    format!(r#"<wpt lat="{}" lon="{}">"#, latitude as f32, longitude as f32).as_bytes(),
-                )
-                .unwrap();
-            sd_controller
-                .write(
-                    &mut volume,
-                    &mut f,
-                    format!(
-                        r#"<time>{}</time>"#,
-                        timestamp.to_rfc3339_opts(SecondsFormat::Millis, true)
-                    )
-                    .as_bytes(),
-                )
-                .unwrap();
-            sd_controller
-                .write(
-                    &mut volume,
-                    &mut f,
-                    format!(r#"<ele>{}</ele>"#, altitude as f32).as_bytes(),
-                )
-                .unwrap();
-            sd_controller
-                .write(&mut volume, &mut f, b"</wpt>\n")
-                .unwrap();
-        }
-    }
-     });
-
-
-     */
-
     let mut timer_hw = peripherals.ledc.timer0;
     let mut channel_hw = peripherals.ledc.channel0;
     let mut pin_hw = pins.gpio25;
@@ -652,13 +481,17 @@ fn main() -> ! {
 
         if let Some(freq) = freq {
             let config = TimerConfig::default().frequency(freq.into());
-            let timer = Timer::new(timer_hw, &config).unwrap();
-            let mut channel = Channel::new(channel_hw, &timer, pin_hw).unwrap();
-            let max_duty = channel.get_max_duty();
-            channel.set_duty(max_duty / 2).unwrap();
+
+            let mut timer = LedcDriver::new(
+                &mut channel_hw,
+                LedcTimerDriver::new(&mut timer_hw, &config).unwrap(),
+                &mut pin_hw,
+            )
+            .unwrap();
+
+            let max_duty = timer.get_max_duty();
+            timer.set_duty(max_duty / 2).unwrap();
             std::thread::sleep(duration);
-            (channel_hw, pin_hw) = channel.release().unwrap();
-            timer_hw = timer.release().unwrap();
         } else {
             std::thread::sleep(duration);
         }
@@ -676,7 +509,7 @@ fn altitude_change_to_freq(altitude_change_mms: i32) -> Option<Hertz> {
         Some(
             ((2000 + altitude_change_mms / 3)
                 .max(90) // -5.7 m/s
-                .min(5000)// ~ +9m/s
+                .min(5000) // ~ +9m/s
                 as u32)
                 .Hz(),
         )
