@@ -507,9 +507,7 @@ fn altitude_change_to_freq(altitude_change_mms: i32) -> Option<Hertz> {
         None
     } else {
         Some(
-            ((2000 + altitude_change_mms / 3)
-                .clamp(90 /* -5.7 m/s */, 5000 /* ~ +9m/s */ )
-                as u32)
+            ((2000 + altitude_change_mms / 3).clamp(90 /* -5.7 m/s */, 5000 /* ~ +9m/s */) as u32)
                 .Hz(),
         )
     }
