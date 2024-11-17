@@ -44,7 +44,7 @@ fn main() {
     .unwrap();
 
     use esp_idf_hal::spi;
-    let config = <spi::config::Config as Default>::default().baudrate(9600.Hz().into());
+    let config = <spi::config::Config as Default>::default().baudrate(9600.Hz());
 
     let spi2 = spi::SpiDriver::new(
         spi2,
@@ -399,7 +399,7 @@ fn main() {
 
                 let sentence = String::from_utf8_lossy(&buffer[0..buffer_len]);
                 let sentence = sentence.trim();
-                let nmea = parser.parse_sentence(&sentence);
+                let nmea = parser.parse_sentence(sentence);
 
                 // println!("{:?}  => {}", nmea.is_ok(), sentence,);
                 if let Ok(ParsedMessage::Rmc(data)) = nmea {
@@ -446,7 +446,7 @@ fn main() {
                     }
                     glide_ratio_lat = Some(latitude);
                     glide_ratio_lon = Some(longitude);
-                    glide_ratio_alt_m = Some(altitude_baro_m as f64);
+                    glide_ratio_alt_m = Some(altitude_baro_m);
 
                     current_glide_ratio_x10_.store(
                         (glide_ratio_buffer
@@ -480,7 +480,7 @@ fn main() {
         // );
 
         if let Some(freq) = freq {
-            let config = TimerConfig::default().frequency(freq.into());
+            let config = TimerConfig::default().frequency(freq);
 
             let mut timer = LedcDriver::new(
                 &mut channel_hw,
@@ -508,8 +508,7 @@ fn altitude_change_to_freq(altitude_change_mms: i32) -> Option<Hertz> {
     } else {
         Some(
             ((2000 + altitude_change_mms / 3)
-                .max(90) // -5.7 m/s
-                .min(5000) // ~ +9m/s
+                .clamp(90 /* -5.7 m/s */, 5000 /* ~ +9m/s */ )
                 as u32)
                 .Hz(),
         )
@@ -517,11 +516,11 @@ fn altitude_change_to_freq(altitude_change_mms: i32) -> Option<Hertz> {
 }
 
 fn altitude_change_to_beep_duration(altitude_change_mms: i32) -> Duration {
-    Duration::from_millis((150 - altitude_change_mms / 33).max(60).min(400) as u64)
+    Duration::from_millis((150 - altitude_change_mms / 33).clamp(60, 400) as u64)
 }
 
 fn altitude_change_to_no_beep_duration(altitude_change_mms: i32) -> Duration {
-    Duration::from_millis((150 - altitude_change_mms / 33).max(60).min(400) as u64)
+    Duration::from_millis((150 - altitude_change_mms / 33).clamp(60, 400) as u64)
 }
 
 fn haversine_distance_m(lat1: f64, lon1: f64, lat2: f64, lon2: f64) -> f64 {
