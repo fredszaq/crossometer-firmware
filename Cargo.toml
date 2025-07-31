@@ -29,8 +29,8 @@ embassy = ["esp-idf-svc/embassy-sync", "esp-idf-svc/critical-section", "esp-idf-
 
 [dependencies]
 log = { version = "0.4", default-features = false }
-esp-idf-svc = { version = "0.49", default-features = false }
-esp-idf-hal = "0.44.1"
+esp-idf-svc = { version = "0.50.1", default-features = false }
+esp-idf-hal = "0.45.2"
 embedded-hal = "1.0.0"
 #bme280 = "0.5.1"
 bme280 = { git = "https://github.com/fredszaq/bme280-rs.git", rev = "5cada2522fbfb7637d99ac4126f3444b553e0bf9" }
@@ -38,7 +38,10 @@ embedded-graphics = "0.8.1"
 ssd1306 = "0.9.0"
 nb = "1.0.0"
 #nmea-parser = "0.11.0"
-nmea-parser = { git = "https://github.com/fredszaq/nmea-parser.git", rev = "3355a8c3763fa3be4c0c1ceeb324b8d0df8926f1" }
+nmea-parser = { git = "https://github.com/fredszaq/nmea-parser.git", rev = "529ecd9f581442782080520bb150d49a5443f5dd" }
 
 [build-dependencies]
-embuild = "0.32.0"
+embuild = { version = "0.33.1", features = ["espidf"] }
+
+[patch.crates-io]
+radium = { git = 'https://github.com/ferrilab/ferrilab', rev = "d45d8fddb27dd9900c72adbbdb7108b355028a8f" }

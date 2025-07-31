@@ -1,7 +1,7 @@
 # Dev environment setup
 
 ## required tools
-- `sudo pacman -S --needed gcc git make flex bison gperf python cmake ninja ccache dfu-util libusb python-virtualenv`
+- `sudo pacman -S --needed gcc git make flex bison gperf python cmake ninja ccache dfu-util libusb python-virtualenv libxml2-legacy`
 - `cargo install espup`
 - `cargo install ldproxy`
 - `cargo install espflash`

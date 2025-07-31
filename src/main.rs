@@ -78,54 +78,57 @@ fn main() {
     let current_satellite_count = Arc::new(AtomicU8::new(0));
     let (gps_quality_tx, gps_quality_rx) = std::sync::mpsc::sync_channel(1);
 
-    std::thread::spawn(move || {
-        // init altitude to a fairly negative value so that we get a nice welcome sound as the
-        // current altitude moves to the actual measured value
-        let mut old_altitude_m = -100.0;
-        let mut old_altitude_change_ms = 0.0;
-        let mut last_measure_time = std::time::Instant::now();
-        let mut calibrated = false;
-        let mut sea_level_p = 101325.0;
+    std::thread::Builder::new()
+        .stack_size(65635)
+        .spawn(move || {
+            // init altitude to a fairly negative value so that we get a nice welcome sound as the
+            // current altitude moves to the actual measured value
+            let mut old_altitude_m = -100.0;
+            let mut old_altitude_change_ms = 0.0;
+            let mut last_measure_time = std::time::Instant::now();
+            let mut calibrated = false;
+            let mut sea_level_p = 101325.0;
 
-        loop {
-            let measurements = bmp280.measure(&mut esp_idf_hal::delay::FreeRtos).unwrap();
-            let measure_time = std::time::Instant::now();
+            loop {
+                let measurements = bmp280.measure(&mut esp_idf_hal::delay::FreeRtos).unwrap();
+                let measure_time = std::time::Instant::now();
 
-            if !calibrated {
-                let current_altitude_gps_m = current_altitude_gps_m_.load(Ordering::SeqCst);
-                if current_altitude_gps_m > 0 {
-                    // https://cdn-shop.adafruit.com/datasheets/BST-BMP180-DS000-09.pdf page 17
-                    sea_level_p = measurements.pressure as f64
-                        / (1.0 - current_altitude_gps_m as f64 / 44330.0).powf(5.255);
-                    calibrated = true;
+                if !calibrated {
+                    let current_altitude_gps_m = current_altitude_gps_m_.load(Ordering::SeqCst);
+                    if current_altitude_gps_m > 0 {
+                        // https://cdn-shop.adafruit.com/datasheets/BST-BMP180-DS000-09.pdf page 17
+                        sea_level_p = measurements.pressure as f64
+                            / (1.0 - current_altitude_gps_m as f64 / 44330.0).powf(5.255);
+                        calibrated = true;
+                    }
                 }
+
+                // https://cdn-shop.adafruit.com/datasheets/BST-BMP180-DS000-09.pdf page 16
+                let altitude_m = 44330.0
+                    * (1.0 - (measurements.pressure as f64 / sea_level_p).powf(0.190294957));
+
+                let elapsed = (measure_time - last_measure_time).as_secs_f64();
+                // apply a bit of smoothing on the data
+                let altitude_change_ms =
+                    old_altitude_change_ms * 0.8 + 0.2 * ((altitude_m - old_altitude_m) / elapsed);
+
+                // println!(
+                //     "measure_loop:{},{},{},{}",
+                //     altitude_change_ms as f32,
+                //     altitude_m as f32,
+                //     measurements.pressure as f32,
+                //     elapsed as f32
+                // );
+
+                old_altitude_m = altitude_m;
+                old_altitude_change_ms = altitude_change_ms;
+                last_measure_time = measure_time;
+                current_altitude_baro_mm_.store((altitude_m * 1000.0) as i32, Ordering::SeqCst);
+                current_altitude_change_mms_
+                    .store((altitude_change_ms * 1000.0) as i32, Ordering::SeqCst);
             }
-
-            // https://cdn-shop.adafruit.com/datasheets/BST-BMP180-DS000-09.pdf page 16
-            let altitude_m =
-                44330.0 * (1.0 - (measurements.pressure as f64 / sea_level_p).powf(0.190294957));
-
-            let elapsed = (measure_time - last_measure_time).as_secs_f64();
-            // apply a bit of smoothing on the data
-            let altitude_change_ms =
-                old_altitude_change_ms * 0.8 + 0.2 * ((altitude_m - old_altitude_m) / elapsed);
-
-            // println!(
-            //     "measure_loop:{},{},{},{}",
-            //     altitude_change_ms as f32,
-            //     altitude_m as f32,
-            //     measurements.pressure as f32,
-            //     elapsed as f32
-            // );
-
-            old_altitude_m = altitude_m;
-            old_altitude_change_ms = altitude_change_ms;
-            last_measure_time = measure_time;
-            current_altitude_baro_mm_.store((altitude_m * 1000.0) as i32, Ordering::SeqCst);
-            current_altitude_change_mms_
-                .store((altitude_change_ms * 1000.0) as i32, Ordering::SeqCst);
-        }
-    });
+        })
+        .unwrap();
 
     let current_hours_ = Arc::clone(&current_hours);
     let current_minutes_ = Arc::clone(&current_minutes);
@@ -137,7 +140,8 @@ fn main() {
     let current_satellite_count_ = Arc::clone(&current_satellite_count);
 
     std::thread::Builder::new()
-        .stack_size(131072)
+        .stack_size(65635)
+        .name("display_thread".to_string())
         .spawn(move || {
             use ssd1306::mode::DisplayConfig;
             let interface = ssd1306::I2CDisplayInterface::new(i2c0);
@@ -343,6 +347,8 @@ fn main() {
     let current_glide_ratio_x10_ = Arc::clone(&current_glide_ratio_x10);
 
     std::thread::Builder::new()
+        .name("gps_thread".to_string())
+        .stack_size(65635)
         .spawn(move || {
             let config = esp_idf_hal::uart::UartConfig::new().baudrate(9600.Hz());
             let serial = esp_idf_hal::uart::UartDriver::new(
