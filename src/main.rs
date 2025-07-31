@@ -11,6 +11,36 @@ use std::sync::atomic::{AtomicI32, AtomicU8, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
+
+struct State {
+    current_hours : AtomicU8,
+    current_minutes  : AtomicU8,
+
+    current_altitude_gps_m  :AtomicI32,
+    current_altitude_baro_mm  : AtomicI32,
+    current_speed_kmh  : AtomicI32,
+
+    current_altitude_change_mms  : AtomicI32,
+    current_glide_ratio_x10  : AtomicI32,
+
+    current_satellite_count : AtomicU8
+}
+
+impl Default for State {
+    fn default() -> Self {
+        Self {
+            current_hours: AtomicU8::new(0),
+            current_minutes: AtomicU8::new(0),
+            current_altitude_gps_m: AtomicI32::new(-999),
+            current_altitude_baro_mm: AtomicI32::new(-999999),
+            current_speed_kmh: AtomicI32::new(-1),
+            current_altitude_change_mms: AtomicI32::new(0),
+            current_glide_ratio_x10: AtomicI32::new(0),
+            current_satellite_count: AtomicU8::new(0),
+        }
+    }
+}
+
 fn main() {
     // It is necessary to call this function once. Otherwise some patches to the runtime
     // implemented by esp-idf-sys might not link properly. See https://github.com/esp-rs/esp-idf-template/issues/71
@@ -61,21 +91,10 @@ fn main() {
 
     bmp280.init(&mut esp_idf_hal::delay::FreeRtos).unwrap();
 
-    let current_hours = Arc::new(AtomicU8::new(0));
-    let current_minutes = Arc::new(AtomicU8::new(0));
+    let state = Arc::new(State::default());
 
-    let current_altitude_gps_m = Arc::new(AtomicI32::new(-999));
-    let current_altitude_baro_mm = Arc::new(AtomicI32::new(-999999));
-    let current_speed_kmh = Arc::new(AtomicI32::new(-1));
+    let state_ = Arc::clone(&state);
 
-    let current_altitude_change_mms = Arc::new(AtomicI32::new(0));
-    let current_glide_ratio_x10 = Arc::new(AtomicI32::new(0));
-
-    let current_altitude_change_mms_ = Arc::clone(&current_altitude_change_mms);
-    let current_altitude_gps_m_ = Arc::clone(&current_altitude_gps_m);
-    let current_altitude_baro_mm_ = Arc::clone(&current_altitude_baro_mm);
-
-    let current_satellite_count = Arc::new(AtomicU8::new(0));
     let (gps_quality_tx, gps_quality_rx) = std::sync::mpsc::sync_channel(1);
 
     std::thread::Builder::new()
@@ -94,7 +113,7 @@ fn main() {
                 let measure_time = std::time::Instant::now();
 
                 if !calibrated {
-                    let current_altitude_gps_m = current_altitude_gps_m_.load(Ordering::SeqCst);
+                    let current_altitude_gps_m = state_.current_altitude_gps_m.load(Ordering::SeqCst);
                     if current_altitude_gps_m > 0 {
                         // https://cdn-shop.adafruit.com/datasheets/BST-BMP180-DS000-09.pdf page 17
                         sea_level_p = measurements.pressure as f64
@@ -123,21 +142,14 @@ fn main() {
                 old_altitude_m = altitude_m;
                 old_altitude_change_ms = altitude_change_ms;
                 last_measure_time = measure_time;
-                current_altitude_baro_mm_.store((altitude_m * 1000.0) as i32, Ordering::SeqCst);
-                current_altitude_change_mms_
+                state_.current_altitude_baro_mm.store((altitude_m * 1000.0) as i32, Ordering::SeqCst);
+                state_.current_altitude_change_mms
                     .store((altitude_change_ms * 1000.0) as i32, Ordering::SeqCst);
             }
         })
         .unwrap();
 
-    let current_hours_ = Arc::clone(&current_hours);
-    let current_minutes_ = Arc::clone(&current_minutes);
-    let current_altitude_change_mms_ = Arc::clone(&current_altitude_change_mms);
-    let current_altitude_gps_m_ = Arc::clone(&current_altitude_gps_m);
-    let current_altitude_baro_mm_ = Arc::clone(&current_altitude_baro_mm);
-    let current_speed_kmh_ = Arc::clone(&current_speed_kmh);
-    let current_glide_ratio_x10_ = Arc::clone(&current_glide_ratio_x10);
-    let current_satellite_count_ = Arc::clone(&current_satellite_count);
+    let state_ = Arc::clone(&state);
 
     std::thread::Builder::new()
         .stack_size(65635)
@@ -178,7 +190,7 @@ fn main() {
                     gps_qual = Some(qual)
                 }
 
-                let altitude_gps_m = current_altitude_gps_m_.load(Ordering::SeqCst);
+                let altitude_gps_m = state_.current_altitude_gps_m.load(Ordering::SeqCst);
                 embedded_graphics::text::Text::with_baseline(
                     &format!("{:>4}", altitude_gps_m),
                     embedded_graphics::geometry::Point::zero(),
@@ -206,7 +218,7 @@ fn main() {
                 .draw(&mut display)
                 .unwrap();
 
-                let altitude_baro_m = current_altitude_baro_mm_.load(Ordering::SeqCst) / 1000;
+                let altitude_baro_m = state_.current_altitude_baro_mm.load(Ordering::SeqCst) / 1000;
                 embedded_graphics::text::Text::with_baseline(
                     &format!("{:>4}", altitude_baro_m),
                     embedded_graphics::geometry::Point::new(67, 22),
@@ -234,7 +246,7 @@ fn main() {
                 .draw(&mut display)
                 .unwrap();
 
-                let speed_kmh = current_speed_kmh_.load(Ordering::SeqCst);
+                let speed_kmh = state_.current_speed_kmh.load(Ordering::SeqCst);
 
                 embedded_graphics::text::Text::with_baseline(
                     &format!("{:>3}", speed_kmh),
@@ -254,7 +266,7 @@ fn main() {
                 .draw(&mut display)
                 .unwrap();
 
-                let altitude_change_mms = current_altitude_change_mms_.load(Ordering::SeqCst);
+                let altitude_change_mms = state_.current_altitude_change_mms.load(Ordering::SeqCst);
                 // TODO this is positively ugly and we should use rust formating of floats but it sometimes crashes on esp32...
                 embedded_graphics::text::Text::with_baseline(
                     &format!(
@@ -282,7 +294,7 @@ fn main() {
                 .draw(&mut display)
                 .unwrap();
 
-                let current_glide_ratio_x10_ = current_glide_ratio_x10_.load(Ordering::SeqCst);
+                let current_glide_ratio_x10_ = state_.current_glide_ratio_x10.load(Ordering::SeqCst);
                 // TODO this is positively ugly and we should use rust formating of floats but it sometimes crashes on esp32...
                 embedded_graphics::text::Text::with_baseline(
                     &format!(
@@ -316,7 +328,7 @@ fn main() {
                 .unwrap();
 
                 embedded_graphics::text::Text::with_baseline(
-                    &format!("{}sat", current_satellite_count_.load(Ordering::SeqCst),),
+                    &format!("{}sat", state_.current_satellite_count.load(Ordering::SeqCst),),
                     embedded_graphics::geometry::Point::new(103, 44),
                     text_style_units,
                     embedded_graphics::text::Baseline::Top,
@@ -327,8 +339,8 @@ fn main() {
                 embedded_graphics::text::Text::with_baseline(
                     &format!(
                         "{:02}:{:02}",
-                        current_hours_.load(Ordering::SeqCst),
-                        current_minutes_.load(Ordering::SeqCst)
+                        state_.current_hours.load(Ordering::SeqCst),
+                        state_.current_minutes.load(Ordering::SeqCst)
                     ),
                     embedded_graphics::geometry::Point::new(103, 56),
                     text_style_units,
@@ -343,8 +355,8 @@ fn main() {
         })
         .unwrap();
 
-    let current_altitude_baro_mm_ = Arc::clone(&current_altitude_baro_mm);
-    let current_glide_ratio_x10_ = Arc::clone(&current_glide_ratio_x10);
+
+    let state_ = Arc::clone(&state);
 
     std::thread::Builder::new()
         .name("gps_thread".to_string())
@@ -414,7 +426,7 @@ fn main() {
                     //     data.latitude.map(|it| it as f32),
                     //     data.longitude.map(|it| it as f32)
                     // );
-                    current_speed_kmh.store(
+                    state_.current_speed_kmh.store(
                         data.sog_knots
                             .map(|speed_knots| (speed_knots * 1.852) as i32)
                             .unwrap_or(-1),
@@ -431,14 +443,14 @@ fn main() {
                 })) = nmea
                 {
                     gps_quality_tx.send(quality).unwrap();
-                    current_altitude_gps_m.store(altitude as i32, Ordering::SeqCst);
+                    state_.current_altitude_gps_m.store(altitude as i32, Ordering::SeqCst);
                     // hardcoding UTC+2 for now, should be in the config wifi interface when we have one
-                    current_hours.store(((timestamp.hour() + 2) % 24) as u8, Ordering::SeqCst);
-                    current_minutes.store(timestamp.minute() as u8, Ordering::SeqCst);
-                    current_satellite_count.store(satellite_count, Ordering::SeqCst);
+                    state_.current_hours.store(((timestamp.hour() + 2) % 24) as u8, Ordering::SeqCst);
+                    state_.current_minutes.store(timestamp.minute() as u8, Ordering::SeqCst);
+                    state_.current_satellite_count.store(satellite_count, Ordering::SeqCst);
 
                     let altitude_baro_m =
-                        (current_altitude_baro_mm_.load(Ordering::SeqCst) as f64) / 1000.0;
+                        (state_.current_altitude_baro_mm.load(Ordering::SeqCst) as f64) / 1000.0;
                     if let &(Some(old_lat), Some(old_lon), Some(old_alt)) =
                         &(glide_ratio_lat, glide_ratio_lon, glide_ratio_alt_m)
                     {
@@ -454,7 +466,7 @@ fn main() {
                     glide_ratio_lon = Some(longitude);
                     glide_ratio_alt_m = Some(altitude_baro_m);
 
-                    current_glide_ratio_x10_.store(
+                    state_.current_glide_ratio_x10.store(
                         (glide_ratio_buffer
                             .iter()
                             .fold(GlideRatioElem { d: 0.0, h: 0.0 }, |mut acc, e| {
@@ -476,7 +488,7 @@ fn main() {
     let mut pin_hw = pins.gpio25;
 
     loop {
-        let altitude_change_mms = current_altitude_change_mms.load(Ordering::SeqCst);
+        let altitude_change_mms = state.current_altitude_change_mms.load(Ordering::SeqCst);
         let freq = altitude_change_to_freq(altitude_change_mms);
         let duration = altitude_change_to_beep_duration(altitude_change_mms);
         // println!(
@@ -502,7 +514,7 @@ fn main() {
             std::thread::sleep(duration);
         }
 
-        let altitude_change_mms = current_altitude_change_mms.load(Ordering::SeqCst);
+        let altitude_change_mms = state.current_altitude_change_mms.load(Ordering::SeqCst);
         let duration = altitude_change_to_no_beep_duration(altitude_change_mms);
         std::thread::sleep(duration);
     }
