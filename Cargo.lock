@@ -144,9 +144,10 @@ dependencies = [
 [[package]]
 name = "bme280"
 version = "0.5.1"
-source = "git+https://github.com/fredszaq/bme280-rs.git?rev=5cada2522fbfb7637d99ac4126f3444b553e0bf9#5cada2522fbfb7637d99ac4126f3444b553e0bf9"
+source = "git+https://github.com/VersBinarii/bme280-rs?rev=49d179ed48701df444e58c9e591c81355b6b3189#49d179ed48701df444e58c9e591c81355b6b3189"
 dependencies = [
  "embedded-hal 1.0.0",
+ "embedded-hal-async",
  "maybe-async-cfg",
 ]
 
@@ -366,6 +367,9 @@ name = "crossometer-firmware"
 version = "0.1.0"
 dependencies = [
  "bme280",
+ "embassy-futures",
+ "embassy-sync 0.7.0",
+ "embassy-time",
  "embedded-graphics",
  "embedded-hal 1.0.0",
  "embuild",
@@ -406,6 +410,7 @@ dependencies = [
  "ident_case",
  "proc-macro2",
  "quote",
+ "strsim",
  "syn 2.0.104",
 ]
 
@@ -517,6 +522,29 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "48c757948c5ede0e46177b7add2e67155f70e33c07fea8284df6576da70b3719"
 
 [[package]]
+name = "embassy-executor"
+version = "0.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "90327bcc66333a507f89ecc4e2d911b265c45f5c9bc241f98eee076752d35ac6"
+dependencies = [
+ "critical-section",
+ "document-features",
+ "embassy-executor-macros",
+]
+
+[[package]]
+name = "embassy-executor-macros"
+version = "0.6.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3577b1e9446f61381179a330fc5324b01d511624c55f25e3c66c9e3c626dbecf"
+dependencies = [
+ "darling",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.104",
+]
+
+[[package]]
 name = "embassy-futures"
 version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -537,12 +565,53 @@ dependencies = [
 ]
 
 [[package]]
-name = "embassy-time-driver"
-version = "0.1.0"
+name = "embassy-sync"
+version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6e0c214077aaa9206958b16411c157961fb7990d4ea628120a78d1a5a28aed24"
+checksum = "cef1a8a1ea892f9b656de0295532ac5d8067e9830d49ec75076291fd6066b136"
+dependencies = [
+ "cfg-if",
+ "critical-section",
+ "embedded-io-async",
+ "futures-sink",
+ "futures-util",
+ "heapless",
+]
+
+[[package]]
+name = "embassy-time"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f820157f198ada183ad62e0a66f554c610cdcd1a9f27d4b316358103ced7a1f8"
+dependencies = [
+ "cfg-if",
+ "critical-section",
+ "document-features",
+ "embassy-time-driver",
+ "embassy-time-queue-utils",
+ "embedded-hal 0.2.7",
+ "embedded-hal 1.0.0",
+ "embedded-hal-async",
+ "futures-util",
+]
+
+[[package]]
+name = "embassy-time-driver"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8d45f5d833b6d98bd2aab0c2de70b18bfaa10faf661a1578fd8e5dfb15eb7eba"
 dependencies = [
  "document-features",
+]
+
+[[package]]
+name = "embassy-time-queue-utils"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "dc55c748d16908a65b166d09ce976575fb8852cf60ccd06174092b41064d8f83"
+dependencies = [
+ "embassy-executor",
+ "heapless",
 ]
 
 [[package]]
@@ -725,7 +794,7 @@ checksum = "775ce25171dc4f615146a4a27ed3a64c6fd99ced77d7112062f2b19bf933f5db"
 dependencies = [
  "atomic-waker",
  "critical-section",
- "embassy-sync",
+ "embassy-sync 0.6.2",
  "embedded-can",
  "embedded-hal 0.2.7",
  "embedded-hal 1.0.0",
@@ -744,12 +813,13 @@ dependencies = [
 
 [[package]]
 name = "esp-idf-svc"
-version = "0.50.1"
+version = "0.51.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "13c55828b65052e23941c1020081c9cc6ac99b86a1cfad8507993313f92aa399"
+checksum = "2bc07aaba257d28d54a96af005ca67d0b38876d8837f5d54a3e0547e100b219c"
 dependencies = [
  "embassy-futures",
  "embassy-time-driver",
+ "embassy-time-queue-utils",
  "embedded-hal-async",
  "embedded-svc",
  "embuild",
@@ -1755,6 +1825,12 @@ name = "stable_deref_trait"
 version = "1.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a8f112729512f8e442d81f95a8a7ddf2b7c6b8a1a6f509a95864142b30cab2d3"
+
+[[package]]
+name = "strsim"
+version = "0.11.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7da8b5736845d9f2fcb837ea5d9e2628564b3b043a70948a3f0b778838c5fb4f"
 
 [[package]]
 name = "strum"
