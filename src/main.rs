@@ -201,7 +201,7 @@ async fn beep_loop(
     }
 }
 
-async fn display_loop<'a, 'b>(
+async fn display_loop<'a>(
     mut display: Ssd1306<
         I2CInterface<I2cDriver<'a>>,
         DisplaySize128x64,
@@ -236,7 +236,7 @@ async fn display_loop<'a, 'b>(
 
         let altitude_gps_m = state_.current_altitude_gps_m.load(Ordering::Relaxed);
         embedded_graphics::text::Text::with_baseline(
-            &format!("{:>4}", altitude_gps_m),
+            &format!("{altitude_gps_m:>4}"),
             embedded_graphics::geometry::Point::zero(),
             text_style_data,
             embedded_graphics::text::Baseline::Top,
@@ -264,7 +264,7 @@ async fn display_loop<'a, 'b>(
 
         let altitude_baro_m = state_.current_altitude_baro_mm.load(Ordering::Relaxed) / 1000;
         embedded_graphics::text::Text::with_baseline(
-            &format!("{:>4}", altitude_baro_m),
+            &format!("{altitude_baro_m:>4}"),
             embedded_graphics::geometry::Point::new(67, 22),
             text_style_data,
             embedded_graphics::text::Baseline::Top,
@@ -293,7 +293,7 @@ async fn display_loop<'a, 'b>(
         let speed_kmh = state_.current_speed_kmh.load(Ordering::Relaxed);
 
         embedded_graphics::text::Text::with_baseline(
-            &format!("{:>3}", speed_kmh),
+            &format!("{speed_kmh:>3}" ),
             embedded_graphics::geometry::Point::new(77, 0),
             text_style_data,
             embedded_graphics::text::Baseline::Top,
@@ -360,7 +360,7 @@ async fn display_loop<'a, 'b>(
 
         embedded_graphics::text::Text::with_baseline(
             &if let Some(qual) = gps_qual {
-                format!("{}", qual)
+                format!("{qual}")
             } else {
                 "None".to_string()
             },
@@ -400,7 +400,7 @@ async fn display_loop<'a, 'b>(
         Timer::after(Duration::from_millis(200)).await
     }
 }
-async fn gps_loop<'a, 'b>(serial: AsyncUartDriver<'a, UartDriver<'a>>, state_: Arc<State>) {
+async fn gps_loop<'a>(serial: AsyncUartDriver<'a, UartDriver<'a>>, state_: Arc<State>) {
     let mut buffer = [0u8; 83]; // NMEA sentence is max 79 + 3 bytes in length
     let mut buffer_len;
     let mut sentence_end;
@@ -435,7 +435,7 @@ async fn gps_loop<'a, 'b>(serial: AsyncUartDriver<'a, UartDriver<'a>>, state_: A
                     sentence_end = buffer[buffer_len] as char == '\n';
                     buffer_len += 1;
                 }
-                Err(e) => panic!("{:?}", e),
+                Err(e) => panic!("{e:?}"),
             }
         }
 
