@@ -194,7 +194,6 @@ async fn beep_loop(
         } else {
             Timer::after(duration).await
         }
-
         let altitude_change_mms = state.current_altitude_change_mms.load(Ordering::Relaxed);
         let duration = altitude_change_to_no_beep_duration(altitude_change_mms);
         Timer::after(duration).await
@@ -293,7 +292,7 @@ async fn display_loop<'a>(
         let speed_kmh = state_.current_speed_kmh.load(Ordering::Relaxed);
 
         embedded_graphics::text::Text::with_baseline(
-            &format!("{speed_kmh:>3}" ),
+            &format!("{speed_kmh:>3}"),
             embedded_graphics::geometry::Point::new(77, 0),
             text_style_data,
             embedded_graphics::text::Baseline::Top,
