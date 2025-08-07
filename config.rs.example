@@ -1,0 +1,3 @@
+pub const PILOT_IN_CHARGE: &str = "Pilot";
+pub const GLIDER_TYPE: &str = "SuperGlider";
+pub const GLIDER_ID: &str = "1234";

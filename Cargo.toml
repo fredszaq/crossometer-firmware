@@ -33,13 +33,15 @@ esp-idf-svc = { version = "0.51.0", default-features = false }
 esp-idf-hal = "0.45.2"
 embassy-time = { version = "0.4.0", features = ["generic-queue-8"] }
 embassy-sync = "0.7.0"
+embedded-sdmmc = { git = "https://github.com/marcfir/embedded-sdmmc-rs.git", rev = "0ebc69c3ca192b8d023c213ad95f0ac87fd02ef0" }
+igc_parser = "0.1.7"
 embassy-futures = "0.1.1"
 embedded-hal = "1.0.0"
 #bme280 = "0.5.1"
 #bme280 = { git = "https://github.com/fredszaq/bme280-rs.git", rev = "5cada2522fbfb7637d99ac4126f3444b553e0bf9" }
 bme280 = { git = "https://github.com/VersBinarii/bme280-rs", rev = "49d179ed48701df444e58c9e591c81355b6b3189", features = ["async"] }
 embedded-graphics = "0.8.1"
-ssd1306 = "0.9.0"
+ssd1306 = "0.10.0"
 nb = "1.0.0"
 #nmea-parser = "0.11.0"
 nmea-parser = { git = "https://github.com/fredszaq/nmea-parser.git", rev = "529ecd9f581442782080520bb150d49a5443f5dd" }

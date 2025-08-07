@@ -3,3 +3,4 @@
 /.embuild
 /target
 /Cargo.lock
+/config.rs
