@@ -23,8 +23,10 @@ jobs:
             args: --release
           - command: fmt
             args: --all -- --check --color always
-          - command: clippy
-            args: --all-targets --all-features --workspace -- -D warnings
+          - command: clippy (default features)
+            args: --all-targets --workspace -- -D warnings
+          - command: clippy (silent feature)
+            args: --all-targets --features silent --workspace -- -D warnings
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
