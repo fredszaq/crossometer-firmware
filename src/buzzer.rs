@@ -1,10 +1,17 @@
 use crate::state::State;
-use embassy_time::{Duration, Timer};
+use embassy_time::Duration;
+#[cfg(not(feature = "silent"))]
+use embassy_time::Timer;
 use esp_idf_hal::gpio::AnyOutputPin;
+#[cfg(not(feature = "silent"))]
 use esp_idf_hal::ledc::config::TimerConfig;
-use esp_idf_hal::ledc::{LedcChannel, LedcDriver, LedcTimer, LedcTimerDriver};
+use esp_idf_hal::ledc::{LedcChannel, LedcTimer};
+#[cfg(not(feature = "silent"))]
+use esp_idf_hal::ledc::{LedcDriver, LedcTimerDriver};
+#[cfg(not(feature = "silent"))]
 use esp_idf_hal::peripheral::Peripheral;
 use esp_idf_hal::prelude::{FromValueType, Hertz};
+#[cfg(not(feature = "silent"))]
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
@@ -28,6 +35,9 @@ where
     }
 }
 
+#[cfg(feature = "silent")]
+pub async fn beep_loop<C, T, TH, CH>(_state: Arc<State>, mut _buzzer: BuzzerDriver<TH, CH>) {}
+#[cfg(not(feature = "silent"))]
 pub async fn beep_loop<C, T, TH, CH>(state: Arc<State>, mut buzzer: BuzzerDriver<TH, CH>)
 where
     C: LedcChannel<SpeedMode = <T as LedcTimer>::SpeedMode>,

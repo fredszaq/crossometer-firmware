@@ -19,6 +19,7 @@ opt-level = "z"
 
 [features]
 default = ["crossometer-mini-v0-1"]
+silent = []
 crossometer-mini-v0-1 = []
 
 [dependencies]
