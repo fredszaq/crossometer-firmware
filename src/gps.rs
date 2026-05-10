@@ -1,13 +1,46 @@
 use crate::state::State;
+
 use embassy_time::{Duration, Timer};
 use esp_idf_hal::uart::{AsyncUartDriver, UartDriver};
+use nmea_parser::chrono::{DateTime, Utc};
+#[cfg(not(feature = "fake-gps"))]
 use nmea_parser::chrono::{Datelike, Timelike};
-use nmea_parser::gnss::GgaData;
+#[cfg(not(feature = "fake-gps"))]
+use nmea_parser::gnss::{GgaData, GgaQualityIndicator};
+#[cfg(not(feature = "fake-gps"))]
 use nmea_parser::ParsedMessage;
+#[cfg(not(feature = "fake-gps"))]
 use std::collections::VecDeque;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
+#[derive(Copy, Clone, Debug)]
+pub struct GpsMeasurement {
+    pub timestamp: DateTime<Utc>,
+    pub latitude: f64,
+    pub longitude: f64,
+    pub altitude_m: f64,
+    pub satellite_count: u8,
+}
+
+#[cfg(feature = "fake-gps")]
+pub async fn gps_loop<'a>(_: AsyncUartDriver<'a, UartDriver<'a>>, state: Arc<State>) {
+    let publisher = state.gps_measurements.publisher().unwrap();
+    state.current_satellite_count.store(1, Ordering::Release);
+    loop {
+        let now = { state.time_source.lock().await.now() };
+        publisher.publish_immediate(GpsMeasurement {
+            timestamp: now,
+            latitude: 0.0,
+            longitude: 0.0,
+            altitude_m: 0.0,
+            satellite_count: 1,
+        });
+        Timer::after(Duration::from_secs(10)).await;
+    }
+}
+
+#[cfg(not(feature = "fake-gps"))]
 pub async fn gps_loop<'a>(gps_uart: AsyncUartDriver<'a, UartDriver<'a>>, state: Arc<State>) {
     let mut buffer = [0u8; 83]; // NMEA sentence is max 79 + 3 bytes in length
     let mut buffer_len;
@@ -29,6 +62,8 @@ pub async fn gps_loop<'a>(gps_uart: AsyncUartDriver<'a, UartDriver<'a>>, state: 
             self.d / self.h
         }
     }
+
+    let publisher = state.gps_measurements.publisher().unwrap();
 
     loop {
         buffer_len = 0;
@@ -70,14 +105,27 @@ pub async fn gps_loop<'a>(gps_uart: AsyncUartDriver<'a, UartDriver<'a>>, state: 
             longitude: Some(longitude),
             quality,
             satellite_count: Some(satellite_count),
-            altitude: Some(altitude),
+            altitude: Some(altitude_m),
             ..
         })) = nmea
         {
+            if quality != GgaQualityIndicator::Invalid {
+                {
+                    state.time_source.lock().await.update_fix(timestamp);
+                }
+                publisher.publish_immediate(GpsMeasurement {
+                    timestamp,
+                    latitude,
+                    longitude,
+                    altitude_m,
+                    satellite_count,
+                });
+            }
+
             state.gps_quality_channel.send(quality).await;
             state
                 .current_altitude_gps_m
-                .store(altitude as i32, Ordering::Relaxed);
+                .store(altitude_m as i32, Ordering::Relaxed);
             // hardcoding UTC+2 for now, should be in the config wifi interface when we have one
             state
                 .current_hours
@@ -145,6 +193,7 @@ pub async fn gps_loop<'a>(gps_uart: AsyncUartDriver<'a, UartDriver<'a>>, state: 
     }
 }
 
+#[cfg(not(feature = "fake-gps"))]
 fn haversine_distance_m(lat1: f64, lon1: f64, lat2: f64, lon2: f64) -> f64 {
     let r_earth = 6371000.0;
 

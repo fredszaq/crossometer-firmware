@@ -20,9 +20,11 @@ opt-level = "z"
 [features]
 default = ["crossometer-mini-v0-1"]
 silent = []
+fake-gps = []
 crossometer-mini-v0-1 = []
 
 [dependencies]
+futures = "0.3.31"
 anyhow = "1.0.98"
 log = { version = "0.4", default-features = false }
 esp-idf-svc = { version = "0.51.0", features = ["alloc", "native", "embassy-sync", "critical-section", "embassy-time-driver"] }

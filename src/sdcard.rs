@@ -5,11 +5,14 @@ use embedded_sdmmc::asynchronous::{
     BlockDevice, File, Mode, SdCard, TimeSource, VolumeIdx, VolumeManager,
 };
 use esp_idf_hal::spi::{SpiDeviceDriver, SpiDriver};
+use futures::{pin_mut, select, FutureExt, StreamExt};
 use igc_parser::records::file_header::FileHeader;
 use igc_parser::records::fix::Fix;
 use igc_parser::records::flight_recorder_id::FlightRecorderID;
 use igc_parser::records::Record;
+use nmea_parser::chrono::Timelike;
 use std::fmt::{Display, Formatter};
+use std::ops::DerefMut;
 use std::rc::Rc;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
@@ -130,7 +133,105 @@ pub async fn sdcard_loop<'a>(
     )
     .await;
 
+    let mut barometer_measurements = state.barometer_measurements.subscriber().unwrap();
+    let barometer_measurements = barometer_measurements.deref_mut().fuse();
+    pin_mut!(barometer_measurements);
+
+    let mut gps_measurements = state.gps_measurements.subscriber().unwrap();
+    let gps_measurements = gps_measurements.deref_mut().fuse();
+    pin_mut!(gps_measurements);
+
+    fn to_dms<T: Into<f64>>(value: T) -> (u8, f32, bool) {
+        let value = value.into();
+        let is_positive = value >= 0.0;
+        let abs_value = value.abs();
+        let degrees = abs_value.trunc() as u8;
+        let minutes = ((abs_value - degrees as f64) * 60.0) as f32;
+        (degrees, minutes, is_positive)
+    }
+    async fn write_b_record<
+        'a,
+        D: BlockDevice,
+        T: TimeSource,
+        const MAX_DIRS: usize,
+        const MAX_FILES: usize,
+        const MAX_VOLUMES: usize,
+    >(
+        file: &File<'a, D, T, MAX_DIRS, MAX_FILES, MAX_VOLUMES>,
+        latitude: f64,
+        longitude: f64,
+        altitude_m: Option<i16>,
+        pressure_altitude_m: i16,
+        state: &Arc<State>,
+    ) {
+        let (latitude_degrees, latitude_minutes, is_north) = to_dms(latitude);
+        let (longitude_degrees, longitude_minutes, is_east) = to_dms(longitude);
+        let date = { state.time_source.lock().await.now() };
+
+        write(
+            file,
+            Record::B(Fix {
+                timestamp: igc_parser::records::util::Time {
+                    h: date.hour() as u8,
+                    m: date.minute() as u8,
+                    s: date.second() as u8,
+                },
+                coordinates: igc_parser::records::util::Coordinate {
+                    latitude: igc_parser::records::util::Latitude {
+                        degrees: latitude_degrees,
+                        minutes: latitude_minutes,
+                        is_north,
+                    },
+                    longitude: igc_parser::records::util::Longitude {
+                        degrees: longitude_degrees,
+                        minutes: longitude_minutes,
+                        is_east,
+                    },
+                },
+                pressure_alt: pressure_altitude_m,
+                gps_alt: altitude_m,
+                extension: Rc::from(String::new().into_boxed_str()),
+            }),
+        )
+        .await
+    }
+
+    let mut pressure_altitude_m = 0;
+    let mut last_record_time = embassy_time::Instant::now();
+
     loop {
+        select! {
+            baro = barometer_measurements.next() => {
+                pressure_altitude_m = baro.unwrap().altitude_uncalibrated_m as i16;
+            },
+            gps = gps_measurements.next() => {
+                let gps = gps.unwrap();
+                write_b_record(&file,
+                    gps.latitude,
+                    gps.longitude,
+                    Some(gps.altitude_m as i16),
+                    pressure_altitude_m,
+                    &state)
+                .await;
+                last_record_time = embassy_time::Instant::now();
+
+            },
+            _ = Timer::at(last_record_time + Duration::from_secs(2)).fuse()  => {
+                // we should have a gps point every second, but if we don't, we should continue to
+                // write barometric altitude.
+                 write_b_record(&file,
+                    0.0,
+                    0.0,
+                    None,
+                    pressure_altitude_m,
+                    &state)
+                .await;
+                last_record_time = embassy_time::Instant::now();
+            }
+        }
+        /*
+
+
         let altitude_gps_m = state.current_altitude_gps_m.load(Ordering::Acquire);
         let altitude_baro_uncalibrated_mm = state
             .current_altitude_baro_uncalibrated_mm
@@ -139,7 +240,7 @@ pub async fn sdcard_loop<'a>(
         let latitude = state.current_lat_x10_000_000.load(Ordering::Relaxed);
         let longitude = state.current_lon_x10_000_000.load(Ordering::Relaxed);
 
-        fn to_dms<T: Into<f64>>(value_x10_000_000: T) -> (u8, f32, bool) {
+        fn to_dms_x10_000_000<T: Into<f64>>(value_x10_000_000: T) -> (u8, f32, bool) {
             let value = value_x10_000_000.into() / 10_000_000.0;
             let is_positive = value >= 0.0;
             let abs_value = value.abs();
@@ -148,8 +249,8 @@ pub async fn sdcard_loop<'a>(
             (degrees, minutes, is_positive)
         }
 
-        let (latitude_degrees, latitude_minutes, is_north) = to_dms(latitude);
-        let (longitude_degrees, longitude_minutes, is_east) = to_dms(longitude);
+        let (latitude_degrees, latitude_minutes, is_north) = to_dms_x10_000_000(latitude);
+        let (longitude_degrees, longitude_minutes, is_east) = to_dms_x10_000_000(longitude);
 
         write(
             &file,
@@ -176,10 +277,10 @@ pub async fn sdcard_loop<'a>(
                 extension: Rc::from(String::new().into_boxed_str()),
             }),
         )
-        .await;
+        .await; */
 
         file.flush().await.unwrap();
-        Timer::after(Duration::from_secs(1)).await;
+        //Timer::after(Duration::from_secs(1)).await;
     }
 }
 
@@ -252,7 +353,11 @@ impl IgcPrint for Fix {
     fn print(&self, formatter: &mut Formatter) -> std::fmt::Result {
         self.timestamp.print(formatter)?;
         self.coordinates.print(formatter)?;
-        write!(formatter, "A")?; // hardcode the fact that we have a gps altitude fix for now
+        if self.gps_alt.is_some() {
+            write!(formatter, "A")?;
+        } else {
+            write!(formatter, "V")?;
+        }
         write!(formatter, "{:05}", self.pressure_alt)?;
         write!(formatter, "{:05}", self.gps_alt.unwrap_or(0))
     }

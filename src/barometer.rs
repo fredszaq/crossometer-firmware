@@ -4,6 +4,13 @@ use esp_idf_hal::spi::{SpiDeviceDriver, SpiDriver};
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
+#[derive(Copy, Clone, Debug)]
+pub struct BarometerMeasurement {
+    pub temperature_c: f32,
+    pub pressure_pa: f32,
+    pub altitude_uncalibrated_m: f32,
+}
+
 pub async fn baro_loop<'a>(
     mut bmp280: AsyncBME280<SpiDeviceDriver<'a, SpiDriver<'a>>>,
     state: Arc<State>,
@@ -17,10 +24,24 @@ pub async fn baro_loop<'a>(
     let sea_level_uncalibrated_p = 101325.0;
     let mut sea_level_p = sea_level_uncalibrated_p;
     bmp280.init(&mut embassy_time::Delay).await.unwrap();
+    let publisher = state.barometer_measurements.publisher().unwrap();
 
     loop {
         let measurements = bmp280.measure(&mut embassy_time::Delay).await.unwrap();
         let measure_time = std::time::Instant::now();
+
+        // https://cdn-shop.adafruit.com/datasheets/BST-BMP180-DS000-09.pdf page 16
+        let altitude_m =
+            44330.0 * (1.0 - (measurements.pressure as f64 / sea_level_p).powf(0.190294957));
+
+        let altitude_uncalibrated_m = 44330.0
+            * (1.0 - (measurements.pressure as f64 / sea_level_uncalibrated_p).powf(0.190294957));
+
+        publisher.publish_immediate(BarometerMeasurement {
+            temperature_c: measurements.temperature,
+            pressure_pa: measurements.pressure,
+            altitude_uncalibrated_m: altitude_uncalibrated_m as f32,
+        });
 
         if !calibrated {
             let current_altitude_gps_m = state.current_altitude_gps_m.load(Ordering::Acquire);
@@ -31,13 +52,6 @@ pub async fn baro_loop<'a>(
                 calibrated = true;
             }
         }
-
-        // https://cdn-shop.adafruit.com/datasheets/BST-BMP180-DS000-09.pdf page 16
-        let altitude_m =
-            44330.0 * (1.0 - (measurements.pressure as f64 / sea_level_p).powf(0.190294957));
-
-        let altitude_uncalibrated_m = 44330.0
-            * (1.0 - (measurements.pressure as f64 / sea_level_uncalibrated_p).powf(0.190294957));
 
         let elapsed = (measure_time - last_measure_time).as_secs_f64();
         // apply a bit of smoothing on the data
@@ -64,5 +78,7 @@ pub async fn baro_loop<'a>(
         state
             .current_altitude_change_mms
             .store((altitude_change_ms * 1000.0) as i32, Ordering::Release);
+
+        embassy_time::Timer::after(embassy_time::Duration::from_millis(20)).await;
     }
 }
