@@ -73,9 +73,6 @@ pub async fn baro_loop<'a>(
             .current_altitude_baro_calibrated_mm
             .store((altitude_m * 1000.0) as i32, Ordering::Relaxed);
         state
-            .current_altitude_baro_uncalibrated_mm
-            .store((altitude_uncalibrated_m * 1000.0) as i32, Ordering::Relaxed);
-        state
             .current_altitude_change_mms
             .store((altitude_change_ms * 1000.0) as i32, Ordering::Release);
 

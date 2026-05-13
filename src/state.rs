@@ -11,20 +11,11 @@ use std::ops::Deref;
 use std::sync::atomic::{AtomicI32, AtomicU8};
 
 pub struct State {
-    pub current_day0: AtomicU8,
-    pub current_month0: AtomicU8,
-    pub current_year1970: AtomicI32,
-
     pub current_hours: AtomicU8,
     pub current_minutes: AtomicU8,
-    pub current_seconds: AtomicU8,
-
-    pub current_lon_x10_000_000: AtomicI32,
-    pub current_lat_x10_000_000: AtomicI32,
 
     pub current_altitude_gps_m: AtomicI32,
     pub current_altitude_baro_calibrated_mm: AtomicI32,
-    pub current_altitude_baro_uncalibrated_mm: AtomicI32,
     pub current_speed_kmh: AtomicI32,
 
     pub current_altitude_change_mms: AtomicI32,
@@ -44,17 +35,10 @@ pub struct State {
 impl Default for State {
     fn default() -> Self {
         Self {
-            current_day0: AtomicU8::new(0),
-            current_month0: AtomicU8::new(0),
-            current_year1970: AtomicI32::new(0),
             current_hours: AtomicU8::new(0),
             current_minutes: AtomicU8::new(0),
-            current_seconds: AtomicU8::new(0),
-            current_lon_x10_000_000: AtomicI32::new(0),
-            current_lat_x10_000_000: AtomicI32::new(0),
             current_altitude_gps_m: AtomicI32::new(-999),
             current_altitude_baro_calibrated_mm: AtomicI32::new(-999999),
-            current_altitude_baro_uncalibrated_mm: AtomicI32::new(-999999),
             current_speed_kmh: AtomicI32::new(-1),
             current_altitude_change_mms: AtomicI32::new(0),
             current_glide_ratio_x10: AtomicI32::new(0),

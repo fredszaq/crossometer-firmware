@@ -2,9 +2,9 @@ use crate::state::State;
 
 use embassy_time::{Duration, Timer};
 use esp_idf_hal::uart::{AsyncUartDriver, UartDriver};
-use nmea_parser::chrono::{DateTime, Utc};
 #[cfg(not(feature = "fake-gps"))]
-use nmea_parser::chrono::{Datelike, Timelike};
+use nmea_parser::chrono::Timelike;
+use nmea_parser::chrono::{DateTime, Utc};
 #[cfg(not(feature = "fake-gps"))]
 use nmea_parser::gnss::{GgaData, GgaQualityIndicator};
 #[cfg(not(feature = "fake-gps"))]
@@ -27,16 +27,44 @@ pub struct GpsMeasurement {
 pub async fn gps_loop<'a>(_: AsyncUartDriver<'a, UartDriver<'a>>, state: Arc<State>) {
     let publisher = state.gps_measurements.publisher().unwrap();
     state.current_satellite_count.store(1, Ordering::Release);
+
+    let center_lat = 48.858370_f64;
+    let center_lon = 2.294481_f64;
+    let radius_m = 500.0_f64;
+    let speed_kmh = 30.0_f64;
+    let speed_ms = speed_kmh * 1000.0 / 3600.0;
+    let angular_speed_rad_s = speed_ms / radius_m;
+
+    // meters per degree at this latitude (spherical-Earth approximation)
+    let m_per_deg_lat = 111_320.0_f64;
+    let m_per_deg_lon = m_per_deg_lat * center_lat.to_radians().cos();
+
+    state
+        .current_speed_kmh
+        .store(speed_kmh as i32, Ordering::Relaxed);
+
+    let start = embassy_time::Instant::now();
+    let mut tick: u64 = 0;
+
     loop {
+        let elapsed_s = (embassy_time::Instant::now() - start).as_micros() as f64 / 1_000_000.0;
+        let theta = angular_speed_rad_s * elapsed_s;
+        let latitude = center_lat + (radius_m / m_per_deg_lat) * theta.sin();
+        let longitude = center_lon + (radius_m / m_per_deg_lon) * theta.cos();
+
         let now = { state.time_source.lock().await.now() };
         publisher.publish_immediate(GpsMeasurement {
             timestamp: now,
-            latitude: 0.0,
-            longitude: 0.0,
+            latitude,
+            longitude,
             altitude_m: 0.0,
             satellite_count: 1,
         });
-        Timer::after(Duration::from_secs(10)).await;
+
+        // ~once a minute, hold for 10s instead of 1s to simulate a GPS dropout
+        let gap_s = if tick % 60 == 59 { 10 } else { 1 };
+        tick += 1;
+        Timer::after(Duration::from_secs(gap_s)).await;
     }
 }
 
@@ -133,26 +161,6 @@ pub async fn gps_loop<'a>(gps_uart: AsyncUartDriver<'a, UartDriver<'a>>, state: 
             state
                 .current_minutes
                 .store(timestamp.minute() as u8, Ordering::Relaxed);
-            state
-                .current_seconds
-                .store(timestamp.second() as u8, Ordering::Relaxed);
-
-            state
-                .current_day0
-                .store(timestamp.day0() as u8, Ordering::Relaxed);
-            state
-                .current_month0
-                .store(timestamp.month0() as u8, Ordering::Relaxed);
-            state
-                .current_year1970
-                .store(timestamp.year() - 1970, Ordering::Relaxed);
-
-            state
-                .current_lat_x10_000_000
-                .store((latitude * 10_000_000.0) as i32, Ordering::Relaxed);
-            state
-                .current_lon_x10_000_000
-                .store((longitude * 10_000_000.0) as i32, Ordering::Relaxed);
 
             state
                 .current_satellite_count

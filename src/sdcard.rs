@@ -1,4 +1,5 @@
 use crate::config;
+use crate::gps::GpsMeasurement;
 use crate::state::State;
 use embassy_time::{Duration, Timer};
 use embedded_sdmmc::asynchronous::{
@@ -197,6 +198,7 @@ pub async fn sdcard_loop<'a>(
     }
 
     let mut pressure_altitude_m = 0;
+    let mut last_gps: Option<GpsMeasurement> = None;
     let mut last_record_time = embassy_time::Instant::now();
 
     loop {
@@ -213,15 +215,20 @@ pub async fn sdcard_loop<'a>(
                     pressure_altitude_m,
                     &state)
                 .await;
+                last_gps = Some(gps);
                 last_record_time = embassy_time::Instant::now();
 
             },
             _ = Timer::at(last_record_time + Duration::from_secs(2)).fuse()  => {
                 // we should have a gps point every second, but if we don't, we should continue to
-                // write barometric altitude.
-                 write_b_record(&file,
-                    0.0,
-                    0.0,
+                // write barometric altitude. Reuse the last known fix's lat/lon so the track
+                // doesn't jump to Null Island; mark the record as invalid (gps_alt = None → 'V').
+                let (lat, lon) = last_gps
+                    .map(|g| (g.latitude, g.longitude))
+                    .unwrap_or((0.0, 0.0));
+                write_b_record(&file,
+                    lat,
+                    lon,
                     None,
                     pressure_altitude_m,
                     &state)
@@ -229,58 +236,8 @@ pub async fn sdcard_loop<'a>(
                 last_record_time = embassy_time::Instant::now();
             }
         }
-        /*
-
-
-        let altitude_gps_m = state.current_altitude_gps_m.load(Ordering::Acquire);
-        let altitude_baro_uncalibrated_mm = state
-            .current_altitude_baro_uncalibrated_mm
-            .load(Ordering::Relaxed);
-
-        let latitude = state.current_lat_x10_000_000.load(Ordering::Relaxed);
-        let longitude = state.current_lon_x10_000_000.load(Ordering::Relaxed);
-
-        fn to_dms_x10_000_000<T: Into<f64>>(value_x10_000_000: T) -> (u8, f32, bool) {
-            let value = value_x10_000_000.into() / 10_000_000.0;
-            let is_positive = value >= 0.0;
-            let abs_value = value.abs();
-            let degrees = abs_value.trunc() as u8;
-            let minutes = ((abs_value - degrees as f64) * 60.0) as f32;
-            (degrees, minutes, is_positive)
-        }
-
-        let (latitude_degrees, latitude_minutes, is_north) = to_dms_x10_000_000(latitude);
-        let (longitude_degrees, longitude_minutes, is_east) = to_dms_x10_000_000(longitude);
-
-        write(
-            &file,
-            Record::B(Fix {
-                timestamp: igc_parser::records::util::Time {
-                    h: state.current_hours.load(Ordering::Relaxed),
-                    m: state.current_minutes.load(Ordering::Relaxed),
-                    s: state.current_seconds.load(Ordering::Relaxed),
-                },
-                coordinates: igc_parser::records::util::Coordinate {
-                    latitude: igc_parser::records::util::Latitude {
-                        degrees: latitude_degrees,
-                        minutes: latitude_minutes,
-                        is_north,
-                    },
-                    longitude: igc_parser::records::util::Longitude {
-                        degrees: longitude_degrees,
-                        minutes: longitude_minutes,
-                        is_east,
-                    },
-                },
-                pressure_alt: (altitude_baro_uncalibrated_mm / 1000) as i16,
-                gps_alt: Some(altitude_gps_m as i16),
-                extension: Rc::from(String::new().into_boxed_str()),
-            }),
-        )
-        .await; */
 
         file.flush().await.unwrap();
-        //Timer::after(Duration::from_secs(1)).await;
     }
 }
 
