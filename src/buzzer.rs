@@ -68,6 +68,11 @@ where
     loop {
         let altitude_change_mms = state.current_altitude_change_mms.load(Ordering::Acquire);
         let freq = altitude_change_to_freq(altitude_change_mms);
+        println!(
+            "buzzer_loop: change={} freq={:?}",
+            altitude_change_mms,
+            freq.map(|f| f.0)
+        );
         let duration = altitude_change_to_beep_duration(altitude_change_mms);
         // println!(
         //     "buzzer_loop:{},{}",

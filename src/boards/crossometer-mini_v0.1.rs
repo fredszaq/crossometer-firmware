@@ -68,7 +68,7 @@ impl Board<'_> {
         use esp_idf_hal::uart::UartConfig;
         use ssd1306::prelude::DisplayRotation;
         let spi_bmp280_config =
-            <spi::config::Config as Default>::default().baudrate(10.MHz().into());
+            <spi::config::Config as Default>::default().baudrate(1.MHz().into());
 
         let spi_bmp280_driver = spi::SpiDriver::new(
             spi_bmp280,
