@@ -1,6 +1,7 @@
 use crate::config;
 use crate::gps::GpsMeasurement;
 use crate::state::State;
+use anyhow::anyhow;
 use embassy_time::{Duration, Timer};
 use embedded_sdmmc::asynchronous::{
     BlockDevice, File, Mode, SdCard, TimeSource, VolumeIdx, VolumeManager,
@@ -18,21 +19,49 @@ use std::rc::Rc;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
+#[derive(Copy, Clone, Debug, PartialEq)]
+pub enum SdCardStatus {
+    WaitingForGpsFix,
+    Logging { file_id: i32 },
+    Error,
+}
+
 pub async fn sdcard_loop<'a>(
     sdcard: SdCard<SpiDeviceDriver<'a, SpiDriver<'a>>, embassy_time::Delay>,
     state: Arc<State>,
 ) {
+    update_status(&state, SdCardStatus::WaitingForGpsFix);
+
     while state.current_satellite_count.load(Ordering::Relaxed) == 0 {
         log::info!("waiting for GPS to get a fix before opening sdcard");
         Timer::after(Duration::from_secs(1)).await;
     }
 
-    let volume_manager = VolumeManager::new(sdcard, &*state);
+    if let Err(e) = log_igc_loop(sdcard, &state).await {
+        log::error!("sdcard logging stopped: {e}");
+        update_status(&state, SdCardStatus::Error);
+    }
+}
+
+fn update_status(state: &State, status: SdCardStatus) {
+    log::info!("sdcard status: {status:?}");
+    state.sdcard_status.sender().send(status);
+}
+
+async fn log_igc_loop<'a>(
+    sdcard: SdCard<SpiDeviceDriver<'a, SpiDriver<'a>>, embassy_time::Delay>,
+    state: &Arc<State>,
+) -> anyhow::Result<()> {
+    let volume_manager = VolumeManager::new(sdcard, &**state);
     let volume0 = volume_manager
         .open_volume(VolumeIdx(0))
         .await
-        .expect("could not open sdcard volume 0, is the sdcard properly formatted?");
-    let root_dir = volume0.open_root_dir().unwrap();
+        .map_err(|e| {
+            anyhow!("could not open sdcard volume 0, is the sdcard properly formatted? {e:?}")
+        })?;
+    let root_dir = volume0
+        .open_root_dir()
+        .map_err(|e| anyhow!("could not open root dir: {e:?}"))?;
 
     // embedded-sdmmc only supports 8.3 filenames, and date is not reliable when gps is starting
     // so filenames are just XCM00001.igc, XCM00002.igc, etc. Let's find the first one that does
@@ -57,7 +86,9 @@ pub async fn sdcard_loop<'a>(
     let file = root_dir
         .open_file_in_dir(filename.as_str(), Mode::ReadWriteCreateOrAppend)
         .await
-        .expect("could not open file");
+        .map_err(|e| anyhow!("could not open file {filename}: {e:?}"))?;
+
+    update_status(state, SdCardStatus::Logging { file_id });
 
     // see https://www.fai.org/sites/default/files/igc_specification_dec_2024_with_al9.pdf for
     // the igc file format specification
@@ -85,54 +116,54 @@ pub async fn sdcard_loop<'a>(
             extension: rcstr(""),
         }),
     )
-    .await;
+    .await?;
 
     write(
         &file,
         Record::H(FileHeader::PilotInCharge(rcstr(config::PILOT_IN_CHARGE))),
     )
-    .await;
+    .await?;
 
-    write(&file, Record::H(FileHeader::SecondPilot(rcstr("Nil")))).await;
+    write(&file, Record::H(FileHeader::SecondPilot(rcstr("Nil")))).await?;
 
     write(
         &file,
         Record::H(FileHeader::GliderType(rcstr(config::GLIDER_TYPE))),
     )
-    .await;
+    .await?;
 
     write(
         &file,
         Record::H(FileHeader::GliderID(rcstr(config::GLIDER_ID))),
     )
-    .await;
+    .await?;
 
-    write(&file, Record::H(FileHeader::GPSDatum(rcstr("WGS84")))).await;
+    write(&file, Record::H(FileHeader::GPSDatum(rcstr("WGS84")))).await?;
 
     write(
         &file,
         Record::H(FileHeader::Firmware(rcstr(env!("CARGO_PKG_VERSION")))),
     )
-    .await;
+    .await?;
 
-    write(&file, Record::H(FileHeader::Hardware(rcstr("0.1")))).await;
+    write(&file, Record::H(FileHeader::Hardware(rcstr("0.1")))).await?;
 
     write(
         &file,
         Record::H(FileHeader::LoggerType(rcstr("Crossometer Mini"))),
     )
-    .await;
+    .await?;
 
     write(
         &file,
         Record::H(FileHeader::GPSManufacturer(rcstr("UBLOX,UBX-M8030-KT"))),
     )
-    .await;
+    .await?;
     write(
         &file,
         Record::H(FileHeader::PressureSensor(rcstr("BOSCH,BMP280"))),
     )
-    .await;
+    .await?;
 
     let mut barometer_measurements = state.barometer_measurements.subscriber().unwrap();
     let barometer_measurements = barometer_measurements.deref_mut().fuse();
@@ -164,7 +195,7 @@ pub async fn sdcard_loop<'a>(
         altitude_m: Option<i16>,
         pressure_altitude_m: i16,
         state: &Arc<State>,
-    ) {
+    ) -> anyhow::Result<()> {
         let (latitude_degrees, latitude_minutes, is_north) = to_dms(latitude);
         let (longitude_degrees, longitude_minutes, is_east) = to_dms(longitude);
         let date = { state.time_source.lock().await.now() };
@@ -214,7 +245,7 @@ pub async fn sdcard_loop<'a>(
                     Some(gps.altitude_m as i16),
                     pressure_altitude_m,
                     &state)
-                .await;
+                .await?;
                 last_gps = Some(gps);
                 last_record_time = embassy_time::Instant::now();
 
@@ -232,12 +263,14 @@ pub async fn sdcard_loop<'a>(
                     None,
                     pressure_altitude_m,
                     &state)
-                .await;
+                .await?;
                 last_record_time = embassy_time::Instant::now();
             }
         }
 
-        file.flush().await.unwrap();
+        file.flush()
+            .await
+            .map_err(|e| anyhow!("cannot flush file: {e:?}"))?;
     }
 }
 
@@ -251,7 +284,7 @@ async fn write<
 >(
     file: &File<'a, D, T, MAX_DIRS, MAX_FILES, MAX_VOLUMES>,
     record: Record,
-) {
+) -> anyhow::Result<()> {
     struct RecordWrapper(Record);
 
     impl Display for RecordWrapper {
@@ -266,7 +299,7 @@ async fn write<
 
     file.write(to_write.as_bytes())
         .await
-        .expect("cannot write to file");
+        .map_err(|e| anyhow!("cannot write to file: {e:?}"))
 }
 
 trait IgcPrint {

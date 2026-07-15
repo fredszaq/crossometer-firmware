@@ -1,9 +1,11 @@
 use crate::barometer::BarometerMeasurement;
 use crate::gps::GpsMeasurement;
+use crate::sdcard::SdCardStatus;
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::channel::Channel;
 use embassy_sync::mutex::Mutex;
 use embassy_sync::pubsub::PubSubChannel;
+use embassy_sync::watch::Watch;
 use embedded_sdmmc::asynchronous::{TimeSource, Timestamp};
 use nmea_parser::chrono::{DateTime, Datelike, Timelike, Utc};
 use nmea_parser::gnss::GgaQualityIndicator;
@@ -30,6 +32,8 @@ pub struct State {
     pub time_source: Mutex<CriticalSectionRawMutex, GpsTimeSource>,
 
     pub gps_quality_channel: Channel<CriticalSectionRawMutex, GgaQualityIndicator, 1>,
+
+    pub sdcard_status: Watch<CriticalSectionRawMutex, SdCardStatus, 2>,
 }
 
 impl Default for State {
@@ -47,6 +51,7 @@ impl Default for State {
             gps_measurements: PubSubChannel::new(),
             time_source: Mutex::new(GpsTimeSource::default()),
             gps_quality_channel: Channel::new(),
+            sdcard_status: Watch::new(),
         }
     }
 }

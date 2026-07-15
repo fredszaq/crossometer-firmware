@@ -18,7 +18,7 @@ fn main() {
     let state_ = Arc::clone(&state);
 
     std::thread::Builder::new()
-        .stack_size(64635)
+        .stack_size(32768)
         .spawn(move || {
             block_on(barometer::baro_loop(board.barometer, state_));
         })
@@ -27,18 +27,31 @@ fn main() {
     let state_ = Arc::clone(&state);
 
     std::thread::Builder::new()
-        .stack_size(64635)
+        .stack_size(32768)
         .name("display_thread".to_string())
         .spawn(move || {
             block_on(display::display_loop(board.display, state_));
         })
         .unwrap();
 
+    #[cfg(feature = "wifi")]
+    {
+        let state_ = Arc::clone(&state);
+        let modem = board.modem;
+        std::thread::Builder::new()
+            .name("wifi_thread".to_string())
+            .stack_size(16384)
+            .spawn(move || {
+                wifi::wifi_nmea_server(modem, state_);
+            })
+            .unwrap();
+    }
+
     let state_ = Arc::clone(&state);
 
     std::thread::Builder::new()
         .name("gps_thread".to_string())
-        .stack_size(64635)
+        .stack_size(32768)
         .spawn(move || {
             block_on(gps::gps_loop(board.gps, state_));
         })
@@ -62,3 +75,5 @@ mod display;
 mod gps;
 mod sdcard;
 mod state;
+#[cfg(feature = "wifi")]
+mod wifi;

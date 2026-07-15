@@ -13,6 +13,8 @@ use esp_idf_hal::prelude::*;
 
 pub struct Board<'a> {
     pub gps: AsyncUartDriver<'a, UartDriver<'a>>,
+    #[cfg(feature = "wifi")]
+    pub modem: esp_idf_hal::modem::Modem,
     pub barometer: AsyncBME280<SpiDeviceDriver<'a, SpiDriver<'a>>>,
     pub display: Ssd1306<
         I2CInterface<I2cDriver<'a>>,
@@ -127,6 +129,8 @@ impl Board<'_> {
 
         Ok(Board {
             gps: uart_gps_driver,
+            #[cfg(feature = "wifi")]
+            modem: peripherals.modem,
             barometer: bmp280,
             display: ssd1306,
             sdcard,

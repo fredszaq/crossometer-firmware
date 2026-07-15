@@ -18,9 +18,10 @@ debug = true    # Symbols are nice and they don't increase the size on Flash
 opt-level = "z"
 
 [features]
-default = ["crossometer-mini-v0-1"]
+default = ["crossometer-mini-v0-1", "wifi"]
 silent = []
 fake-gps = []
+wifi = []
 crossometer-mini-v0-1 = []
 
 [dependencies]

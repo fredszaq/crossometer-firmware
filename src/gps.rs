@@ -21,6 +21,10 @@ pub struct GpsMeasurement {
     pub longitude: f64,
     pub altitude_m: f64,
     pub satellite_count: u8,
+    /// speed over ground, from the latest RMC sentence
+    pub speed_kmh: Option<f64>,
+    /// course over ground in degrees, from the latest RMC sentence
+    pub course_deg: Option<f64>,
 }
 
 #[cfg(feature = "fake-gps")]
@@ -31,6 +35,7 @@ pub async fn gps_loop<'a>(_: AsyncUartDriver<'a, UartDriver<'a>>, state: Arc<Sta
     let center_lat = 48.858370_f64;
     let center_lon = 2.294481_f64;
     let radius_m = 500.0_f64;
+    let altitude_m = 300.0_f64;
     let speed_kmh = 30.0_f64;
     let speed_ms = speed_kmh * 1000.0 / 3600.0;
     let angular_speed_rad_s = speed_ms / radius_m;
@@ -42,6 +47,9 @@ pub async fn gps_loop<'a>(_: AsyncUartDriver<'a, UartDriver<'a>>, state: Arc<Sta
     state
         .current_speed_kmh
         .store(speed_kmh as i32, Ordering::Relaxed);
+    state
+        .current_altitude_gps_m
+        .store(altitude_m as i32, Ordering::Relaxed);
 
     let start = embassy_time::Instant::now();
     let mut tick: u64 = 0;
@@ -52,13 +60,21 @@ pub async fn gps_loop<'a>(_: AsyncUartDriver<'a, UartDriver<'a>>, state: Arc<Sta
         let latitude = center_lat + (radius_m / m_per_deg_lat) * theta.sin();
         let longitude = center_lon + (radius_m / m_per_deg_lon) * theta.cos();
 
+        // moving along the circle, the heading is the tangent: position derivative is
+        // (cos θ, -sin θ) in (north, east) meters, bearing is clockwise from north
+        let course_deg = f64::atan2(-theta.sin(), theta.cos())
+            .to_degrees()
+            .rem_euclid(360.0);
+
         let now = { state.time_source.lock().await.now() };
         publisher.publish_immediate(GpsMeasurement {
             timestamp: now,
             latitude,
             longitude,
-            altitude_m: 0.0,
+            altitude_m,
             satellite_count: 1,
+            speed_kmh: Some(speed_kmh),
+            course_deg: Some(course_deg),
         });
 
         // ~once a minute, hold for 10s instead of 1s to simulate a GPS dropout
@@ -78,6 +94,11 @@ pub async fn gps_loop<'a>(gps_uart: AsyncUartDriver<'a, UartDriver<'a>>, state: 
     let mut glide_ratio_lat = None;
     let mut glide_ratio_lon = None;
     let mut glide_ratio_alt_m = None;
+
+    // speed and course come from RMC sentences while the rest of the measurement comes
+    // from GGA ones, keep the latest values around to build full measurements
+    let mut speed_kmh = None;
+    let mut course_deg = None;
 
     let mut glide_ratio_buffer = VecDeque::with_capacity(10);
     struct GlideRatioElem {
@@ -121,10 +142,10 @@ pub async fn gps_loop<'a>(gps_uart: AsyncUartDriver<'a, UartDriver<'a>>, state: 
             //     data.latitude.map(|it| it as f32),
             //     data.longitude.map(|it| it as f32)
             // );
+            speed_kmh = data.sog_knots.map(|speed_knots| speed_knots * 1.852);
+            course_deg = data.bearing;
             state.current_speed_kmh.store(
-                data.sog_knots
-                    .map(|speed_knots| (speed_knots * 1.852) as i32)
-                    .unwrap_or(-1),
+                speed_kmh.map(|speed| speed as i32).unwrap_or(-1),
                 Ordering::Relaxed,
             );
         } else if let Ok(ParsedMessage::Gga(GgaData {
@@ -147,6 +168,8 @@ pub async fn gps_loop<'a>(gps_uart: AsyncUartDriver<'a, UartDriver<'a>>, state: 
                     longitude,
                     altitude_m,
                     satellite_count,
+                    speed_kmh,
+                    course_deg,
                 });
             }
 
