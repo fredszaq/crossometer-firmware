@@ -253,7 +253,7 @@ async fn log_igc_loop<'a>(
                     gps.longitude,
                     Some(gps.altitude_m as i16),
                     pressure_altitude_m,
-                    &state)
+                    state)
                 .await?;
                 last_gps = Some(gps);
                 last_record_time = embassy_time::Instant::now();
@@ -271,7 +271,7 @@ async fn log_igc_loop<'a>(
                     lon,
                     None,
                     pressure_altitude_m,
-                    &state)
+                    state)
                 .await?;
                 last_record_time = embassy_time::Instant::now();
             }

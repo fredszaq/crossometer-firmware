@@ -77,9 +77,7 @@ pub async fn baro_loop<'a>(
             result => {
                 match result {
                     Ok(Err(e)) => log::error!("bme280 measure failed: {e:?}"),
-                    _ => log::error!(
-                        "bme280 measure timed out, is the sensor properly connected?"
-                    ),
+                    _ => log::error!("bme280 measure timed out, is the sensor properly connected?"),
                 }
                 // isolated glitches recover on the next try, only back off when the sensor
                 // looks properly dead
