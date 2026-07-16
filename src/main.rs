@@ -24,15 +24,18 @@ fn main() {
         })
         .unwrap();
 
-    let state_ = Arc::clone(&state);
+    #[cfg(not(feature = "no-display"))]
+    {
+        let state_ = Arc::clone(&state);
 
-    std::thread::Builder::new()
-        .stack_size(32768)
-        .name("display_thread".to_string())
-        .spawn(move || {
-            block_on(display::display_loop(board.display, state_));
-        })
-        .unwrap();
+        std::thread::Builder::new()
+            .stack_size(32768)
+            .name("display_thread".to_string())
+            .spawn(move || {
+                block_on(display::display_loop(board.display, state_));
+            })
+            .unwrap();
+    }
 
     #[cfg(feature = "wifi")]
     {
@@ -71,6 +74,7 @@ mod board;
 mod buzzer;
 #[path = "../config.rs"]
 mod config;
+#[cfg(not(feature = "no-display"))]
 mod display;
 mod gps;
 mod sdcard;

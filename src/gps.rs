@@ -35,28 +35,32 @@ pub async fn gps_loop<'a>(_: AsyncUartDriver<'a, UartDriver<'a>>, state: Arc<Sta
     let center_lat = 48.858370_f64;
     let center_lon = 2.294481_f64;
     let radius_m = 500.0_f64;
-    let altitude_m = 300.0_f64;
-    let speed_kmh = 30.0_f64;
-    let speed_ms = speed_kmh * 1000.0 / 3600.0;
-    let angular_speed_rad_s = speed_ms / radius_m;
+    let base_altitude_m = 300.0_f64;
+    let base_speed_kmh = 30.0_f64;
 
     // meters per degree at this latitude (spherical-Earth approximation)
     let m_per_deg_lat = 111_320.0_f64;
     let m_per_deg_lon = m_per_deg_lat * center_lat.to_radians().cos();
 
-    state
-        .current_speed_kmh
-        .store(speed_kmh as i32, Ordering::Relaxed);
-    state
-        .current_altitude_gps_m
-        .store(altitude_m as i32, Ordering::Relaxed);
-
     let start = embassy_time::Instant::now();
     let mut tick: u64 = 0;
+    let mut theta = 0.0_f64;
+    let mut last_elapsed_s = 0.0_f64;
 
     loop {
         let elapsed_s = (embassy_time::Instant::now() - start).as_micros() as f64 / 1_000_000.0;
-        let theta = angular_speed_rad_s * elapsed_s;
+
+        // wobble altitude (±100m over 2min) and speed (±5km/h over 20s) so we can see the
+        // values move on the display and in connected clients. The speed is integrated into
+        // the circular motion so that positions, speed and heading stay consistent with
+        // each other
+        let altitude_m =
+            base_altitude_m + 100.0 * (std::f64::consts::TAU * elapsed_s / 120.0).sin();
+        let speed_kmh = base_speed_kmh + 5.0 * (std::f64::consts::TAU * elapsed_s / 20.0).sin();
+        let speed_ms = speed_kmh * 1000.0 / 3600.0;
+        theta += (speed_ms / radius_m) * (elapsed_s - last_elapsed_s);
+        last_elapsed_s = elapsed_s;
+
         let latitude = center_lat + (radius_m / m_per_deg_lat) * theta.sin();
         let longitude = center_lon + (radius_m / m_per_deg_lon) * theta.cos();
 
@@ -65,6 +69,13 @@ pub async fn gps_loop<'a>(_: AsyncUartDriver<'a, UartDriver<'a>>, state: Arc<Sta
         let course_deg = f64::atan2(-theta.sin(), theta.cos())
             .to_degrees()
             .rem_euclid(360.0);
+
+        state
+            .current_speed_kmh
+            .store(speed_kmh as i32, Ordering::Relaxed);
+        state
+            .current_altitude_gps_m
+            .store(altitude_m as i32, Ordering::Relaxed);
 
         let now = { state.time_source.lock().await.now() };
         publisher.publish_immediate(GpsMeasurement {

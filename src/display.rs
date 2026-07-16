@@ -31,8 +31,26 @@ pub async fn display_loop<'a>(
         .build();
 
     let mut gps_qual = None;
+    #[cfg(feature = "print-free-stack")]
+    let mut frame: u32 = 0;
+    #[cfg(feature = "print-free-stack")]
+    let mut last_stack_report = embassy_time::Instant::now();
 
     loop {
+        // every 5s: heartbeat + how close we ever got to overflowing this thread's stack
+        #[cfg(feature = "print-free-stack")]
+        {
+            frame += 1;
+            if last_stack_report.elapsed() >= embassy_time::Duration::from_secs(5) {
+                last_stack_report = embassy_time::Instant::now();
+                let min_free_stack_bytes =
+                    unsafe { esp_idf_svc::sys::uxTaskGetStackHighWaterMark(std::ptr::null_mut()) };
+                log::info!(
+                    "display thread: frame {frame}, min free stack ever: {min_free_stack_bytes} bytes"
+                );
+            }
+        }
+
         display.clear_buffer();
 
         if let Ok(qual) = state.gps_quality_channel.try_receive() {

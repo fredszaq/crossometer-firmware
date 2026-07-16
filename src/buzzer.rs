@@ -3,68 +3,77 @@ use crate::state::State;
 use embassy_time::Duration;
 #[cfg(not(feature = "silent"))]
 use embassy_time::Timer;
-use esp_idf_hal::gpio::AnyOutputPin;
+use esp_idf_hal::gpio::OutputPin;
 #[cfg(not(feature = "silent"))]
 use esp_idf_hal::ledc::config::TimerConfig;
-use esp_idf_hal::ledc::{LedcChannel, LedcTimer};
+#[cfg(not(feature = "silent"))]
+use esp_idf_hal::ledc::Resolution;
+use esp_idf_hal::ledc::{LedcChannel, LedcTimer, SpeedMode};
 #[cfg(not(feature = "silent"))]
 use esp_idf_hal::ledc::{LedcDriver, LedcTimerDriver};
 #[cfg(not(feature = "silent"))]
-use esp_idf_hal::peripheral::Peripheral;
-#[cfg(not(feature = "silent"))]
-use esp_idf_hal::prelude::{FromValueType, Hertz};
+use esp_idf_hal::units::Hertz;
 #[cfg(feature = "silent")]
 use std::marker::PhantomData;
 #[cfg(not(feature = "silent"))]
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
-pub struct BuzzerDriver<TIMER, CHANNEL> {
+pub struct BuzzerDriver<'d, S: SpeedMode> {
     #[cfg(not(feature = "silent"))]
-    timer: TIMER,
+    timer_driver: LedcTimerDriver<'d, S>,
     #[cfg(not(feature = "silent"))]
-    channel: CHANNEL,
-    #[cfg(not(feature = "silent"))]
-    pin: AnyOutputPin,
+    ledc_driver: LedcDriver<'d>,
     #[cfg(feature = "silent")]
-    _phantom_timer: PhantomData<TIMER>,
-    #[cfg(feature = "silent")]
-    _phantom_channel: PhantomData<CHANNEL>,
+    _phantom: PhantomData<&'d S>,
 }
 
-impl<TIMER, CHANNEL> BuzzerDriver<TIMER, CHANNEL>
-where
-    CHANNEL: LedcChannel<SpeedMode = <TIMER as LedcTimer>::SpeedMode>,
-    TIMER: LedcTimer,
-{
+impl<'d, S: SpeedMode> BuzzerDriver<'d, S> {
     #[cfg(not(feature = "silent"))]
-    pub fn new(timer: TIMER, channel: CHANNEL, pin: AnyOutputPin) -> Self {
-        BuzzerDriver {
+    pub fn new<T, C>(timer: T, channel: C, pin: impl OutputPin + 'd) -> Self
+    where
+        T: LedcTimer<SpeedMode = S> + 'd,
+        C: LedcChannel<SpeedMode = S> + 'd,
+    {
+        // 13 bits of resolution so that a single clock choice covers the whole frequency
+        // range we later sweep with set_frequency (with the 80MHz APB clock and 13 bits the
+        // ledc divider stays valid from ~10Hz to ~9.7kHz, we use 90-5000Hz)
+        let timer_driver = LedcTimerDriver::new(
             timer,
-            channel,
-            pin,
+            &TimerConfig::default()
+                .frequency(Hertz(1000))
+                .resolution(Resolution::Bits13),
+        )
+        .unwrap();
+        // the ledc driver only copies the timer info, it does not hold the borrow: we can
+        // keep the timer driver next to it and change the frequency for each beep
+        let mut ledc_driver = LedcDriver::new(channel, &timer_driver, pin).unwrap();
+        ledc_driver.set_duty(0).unwrap();
+
+        BuzzerDriver {
+            timer_driver,
+            ledc_driver,
         }
     }
 
     #[cfg(feature = "silent")]
-    pub fn new(_timer: TIMER, _channel: CHANNEL, _pin: AnyOutputPin) -> Self {
+    pub fn new<T, C>(_timer: T, _channel: C, _pin: impl OutputPin + 'd) -> Self
+    where
+        T: LedcTimer<SpeedMode = S> + 'd,
+        C: LedcChannel<SpeedMode = S> + 'd,
+    {
         BuzzerDriver {
-            _phantom_timer: PhantomData,
-            _phantom_channel: PhantomData,
+            _phantom: PhantomData,
         }
     }
 }
 
 #[cfg(feature = "silent")]
-pub async fn beep_loop<TH, CH>(_state: Arc<State>, mut _buzzer: BuzzerDriver<TH, CH>) {}
+pub async fn beep_loop<S: SpeedMode>(_state: Arc<State>, mut _buzzer: BuzzerDriver<'_, S>) {}
 #[cfg(not(feature = "silent"))]
-pub async fn beep_loop<C, T, TH, CH>(state: Arc<State>, mut buzzer: BuzzerDriver<TH, CH>)
-where
-    C: LedcChannel<SpeedMode = <T as LedcTimer>::SpeedMode>,
-    T: LedcTimer,
-    TH: Peripheral<P = T>,
-    CH: Peripheral<P = C>,
-{
+pub async fn beep_loop<S: SpeedMode>(state: Arc<State>, mut buzzer: BuzzerDriver<'_, S>) {
+    let max_duty = buzzer.ledc_driver.get_max_duty();
+
     loop {
         let altitude_change_mms = state.current_altitude_change_mms.load(Ordering::Acquire);
         let freq = altitude_change_to_freq(altitude_change_mms);
@@ -74,25 +83,21 @@ where
             freq.map(|f| f.0)
         );
         let duration = altitude_change_to_beep_duration(altitude_change_mms);
-        // println!(
-        //     "buzzer_loop:{},{}",
-        //     freq.unwrap_or(0.Hz()).0,
-        //     duration.as_millis()
-        // );
 
         if let Some(freq) = freq {
-            let config = TimerConfig::default().frequency(freq);
-
-            let mut timer = LedcDriver::new(
-                &mut buzzer.channel,
-                LedcTimerDriver::new(&mut buzzer.timer, &config).unwrap(),
-                &mut buzzer.pin,
-            )
-            .unwrap();
-
-            let max_duty = timer.get_max_duty();
-            timer.set_duty(max_duty / 2).unwrap();
-            Timer::after(duration).await
+            // a failed beep should not take down the whole firmware
+            match buzzer.timer_driver.set_frequency(freq) {
+                Ok(()) => {
+                    if let Err(e) = buzzer.ledc_driver.set_duty(max_duty / 2) {
+                        log::error!("buzzer set_duty({}) failed: {e}", max_duty / 2);
+                    }
+                }
+                Err(e) => log::error!("buzzer set_frequency({freq}) failed: {e}"),
+            }
+            Timer::after(duration).await;
+            if let Err(e) = buzzer.ledc_driver.set_duty(0) {
+                log::error!("buzzer set_duty(0) failed: {e}");
+            }
         } else {
             Timer::after(duration).await
         }
@@ -107,10 +112,9 @@ fn altitude_change_to_freq(altitude_change_mms: i32) -> Option<Hertz> {
     if altitude_change_mms > -3000 && altitude_change_mms < 555 {
         None
     } else {
-        Some(
-            ((2000 + altitude_change_mms / 3).clamp(90 /* -5.7 m/s */, 5000 /* ~ +9m/s */) as u32)
-                .Hz(),
-        )
+        Some(Hertz(
+            (2000 + altitude_change_mms / 3).clamp(90 /* -5.7 m/s */, 5000 /* ~ +9m/s */) as u32,
+        ))
     }
 }
 

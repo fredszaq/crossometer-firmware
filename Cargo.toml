@@ -22,15 +22,18 @@ default = ["crossometer-mini-v0-1", "wifi"]
 silent = []
 fake-gps = []
 wifi = []
+print-free-stack = []
+# diagnostic: don't install the i2c driver / display at all (suspected i2c interrupt storm)
+no-display = []
 crossometer-mini-v0-1 = []
 
 [dependencies]
 futures = "0.3.31"
 anyhow = "1.0.98"
 log = { version = "0.4", default-features = false }
-esp-idf-svc = { version = "0.51.0", features = ["alloc", "native", "embassy-sync", "critical-section", "embassy-time-driver"] }
-esp-idf-hal = "0.45.2"
-embassy-time = { version = "0.4.0", features = ["generic-queue-8"] }
+esp-idf-svc = { version = "0.52.1", features = ["alloc", "native", "embassy-sync", "critical-section", "embassy-time-driver"] }
+esp-idf-hal = "0.46.2"
+embassy-time = { version = "0.5.1", features = ["generic-queue-64"] }
 embassy-sync = "0.7.0"
 embedded-sdmmc = { git = "https://github.com/marcfir/embedded-sdmmc-rs.git", rev = "0ebc69c3ca192b8d023c213ad95f0ac87fd02ef0" }
 igc_parser = "0.1.7"
@@ -48,3 +51,6 @@ embuild = { version = "0.33.1", features = ["espidf"] }
 
 [patch.crates-io]
 radium = { git = 'https://github.com/ferrilab/ferrilab', rev = "d45d8fddb27dd9900c72adbbdb7108b355028a8f" }
+# fix for async SPI transactions hanging forever (post_cb fires before the result is
+# queued, see spi_transmit_async), to be upstreamed
+esp-idf-hal = { git = "https://github.com/fredszaq/esp-idf-hal", rev = "314174abc705a9262faceec180deff51bb14fb80" }

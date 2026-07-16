@@ -53,12 +53,21 @@ async fn log_igc_loop<'a>(
     state: &Arc<State>,
 ) -> anyhow::Result<()> {
     let volume_manager = VolumeManager::new(sdcard, &**state);
-    let volume0 = volume_manager
-        .open_volume(VolumeIdx(0))
-        .await
-        .map_err(|e| {
-            anyhow!("could not open sdcard volume 0, is the sdcard properly formatted? {e:?}")
-        })?;
+    // card init is flaky (intermittent UnexpectedResponse at boot) but usually works on a
+    // later attempt: keep retrying instead of giving up on logging for the whole flight
+    let volume0 = loop {
+        match volume_manager.open_volume(VolumeIdx(0)).await {
+            Ok(volume0) => break volume0,
+            Err(e) => {
+                log::error!(
+                    "could not open sdcard volume 0 ({e:?}), retrying in 5s, \
+                     is the sdcard properly formatted?"
+                );
+                update_status(state, SdCardStatus::Error);
+                Timer::after(Duration::from_secs(5)).await;
+            }
+        }
+    };
     let root_dir = volume0
         .open_root_dir()
         .map_err(|e| anyhow!("could not open root dir: {e:?}"))?;

@@ -19,11 +19,25 @@ const NMEA_TCP_PORT: u16 = 10110;
 
 const LK8EX1_PERIOD: embassy_time::Duration = embassy_time::Duration::from_millis(200);
 
-pub fn wifi_nmea_server(modem: Modem, state: Arc<State>) {
-    let sys_loop = EspSystemEventLoop::take().unwrap();
-    let nvs = EspDefaultNvsPartition::take().unwrap();
+pub fn wifi_nmea_server(modem: Modem<'static>, state: Arc<State>) {
+    info!("wifi thread started");
+    // a failing wifi should not take down the rest of the firmware, log and give up
+    if let Err(e) = run_wifi_nmea_server(modem, state) {
+        log::error!("wifi nmea server stopped: {e:#}");
+    }
+}
 
-    let mut wifi = EspWifi::new(modem, sys_loop, Some(nvs)).unwrap();
+fn run_wifi_nmea_server(modem: Modem<'static>, state: Arc<State>) -> anyhow::Result<()> {
+    use anyhow::{anyhow, Context};
+
+    info!("taking the system event loop");
+    let sys_loop = EspSystemEventLoop::take().context("could not take the system event loop")?;
+    info!("initializing nvs");
+    let nvs = EspDefaultNvsPartition::take().context("could not take the nvs partition")?;
+
+    info!("creating the wifi driver");
+    let mut wifi =
+        EspWifi::new(modem, sys_loop, Some(nvs)).context("could not create the wifi driver")?;
 
     let auth_method = if crate::config::WIFI_PASSWORD.is_empty() {
         AuthMethod::None
@@ -31,23 +45,35 @@ pub fn wifi_nmea_server(modem: Modem, state: Arc<State>) {
         AuthMethod::WPA2Personal
     };
 
+    info!("configuring the access point");
     wifi.set_configuration(&Configuration::AccessPoint(AccessPointConfiguration {
-        ssid: crate::config::WIFI_SSID.try_into().unwrap(),
-        password: crate::config::WIFI_PASSWORD.try_into().unwrap(),
+        ssid: crate::config::WIFI_SSID
+            .try_into()
+            .map_err(|_| anyhow!("SSID too long: {}", crate::config::WIFI_SSID))?,
+        password: crate::config::WIFI_PASSWORD
+            .try_into()
+            .map_err(|_| anyhow!("wifi password too long"))?,
         auth_method,
         max_connections: 2,
         ..Default::default()
     }))
-    .unwrap();
+    .context("could not configure the access point")?;
 
-    wifi.start().unwrap();
+    info!("starting the wifi");
+    wifi.start().context("could not start the wifi")?;
 
-    // cap the TX power (units are 0.25dBm, 34 ≈ 8.5dBm, default is 80 = 20dBm)
-    esp_idf_svc::sys::esp!(unsafe { esp_idf_svc::sys::esp_wifi_set_max_tx_power(34) }).unwrap();
+    // cap the TX power (units are 0.25dBm, 34 ≈ 8.5dBm): the client sits half a meter away
+    // in the cockpit, and the full power TX current spikes are hard on the 5V rail
+    if let Err(e) =
+        esp_idf_svc::sys::esp!(unsafe { esp_idf_svc::sys::esp_wifi_set_max_tx_power(34) })
+    {
+        warn!("could not cap wifi TX power: {e}");
+    }
 
     info!("wifi access point '{}' started", crate::config::WIFI_SSID);
 
-    let listener = TcpListener::bind(("0.0.0.0", NMEA_TCP_PORT)).unwrap();
+    let listener = TcpListener::bind(("0.0.0.0", NMEA_TCP_PORT))
+        .with_context(|| format!("could not bind the NMEA server on port {NMEA_TCP_PORT}"))?;
     info!("NMEA server listening on port {NMEA_TCP_PORT}");
 
     loop {
