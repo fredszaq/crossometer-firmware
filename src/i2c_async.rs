@@ -212,7 +212,9 @@ impl embedded_hal_async::i2c::I2c for AsyncI2cDriver<'_> {
                     embedded_hal_async::i2c::I2c::write(self, address, bytes).await?
                 }
                 embedded_hal::i2c::Operation::Read(_) => {
-                    return Err(I2cError(EspError::from_infallible::<ESP_ERR_NOT_SUPPORTED>()))
+                    return Err(I2cError(
+                        EspError::from_infallible::<ESP_ERR_NOT_SUPPORTED>(),
+                    ))
                 }
             }
         }
