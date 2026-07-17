@@ -751,7 +751,7 @@ dependencies = [
 [[package]]
 name = "esp-idf-hal"
 version = "0.46.2"
-source = "git+https://github.com/fredszaq/esp-idf-hal?rev=314174abc705a9262faceec180deff51bb14fb80#314174abc705a9262faceec180deff51bb14fb80"
+source = "git+https://github.com/esp-rs/esp-idf-hal?rev=6d9cd59cedbda3780d97574b4accfcd93ed45281#6d9cd59cedbda3780d97574b4accfcd93ed45281"
 dependencies = [
  "atomic-waker",
  "critical-section",

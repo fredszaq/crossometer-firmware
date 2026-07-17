@@ -52,5 +52,5 @@ embuild = { version = "0.33.1", features = ["espidf"] }
 [patch.crates-io]
 radium = { git = 'https://github.com/ferrilab/ferrilab', rev = "d45d8fddb27dd9900c72adbbdb7108b355028a8f" }
 # fix for async SPI transactions hanging forever (post_cb fires before the result is
-# queued, see spi_transmit_async), to be upstreamed
-esp-idf-hal = { git = "https://github.com/fredszaq/esp-idf-hal", rev = "314174abc705a9262faceec180deff51bb14fb80" }
+# queued, see spi_transmit_async), waiting for release (0.46.3 or 0.47.0)
+esp-idf-hal = { git = "https://github.com/esp-rs/esp-idf-hal", rev = "6d9cd59cedbda3780d97574b4accfcd93ed45281" }
