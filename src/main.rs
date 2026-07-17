@@ -76,6 +76,8 @@ mod buzzer;
 mod config;
 #[cfg(not(feature = "no-display"))]
 mod display;
+#[cfg(not(feature = "no-display"))]
+mod i2c_async;
 mod gps;
 mod sdcard;
 mod state;

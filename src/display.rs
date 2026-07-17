@@ -1,23 +1,23 @@
+use crate::i2c_async::AsyncI2cDriver;
 use crate::state::State;
 use embassy_time::{Duration, Timer};
 use embedded_graphics::Drawable;
-use esp_idf_hal::i2c::I2cDriver;
-use ssd1306::mode::BufferedGraphicsMode;
-use ssd1306::mode::DisplayConfig;
+use ssd1306::mode::BufferedGraphicsModeAsync;
+use ssd1306::mode::DisplayConfigAsync;
 use ssd1306::prelude::{DisplaySize128x64, I2CInterface};
-use ssd1306::Ssd1306;
+use ssd1306::Ssd1306Async;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 pub async fn display_loop<'a>(
-    mut display: Ssd1306<
-        I2CInterface<I2cDriver<'a>>,
+    mut display: Ssd1306Async<
+        I2CInterface<AsyncI2cDriver<'a>>,
         DisplaySize128x64,
-        BufferedGraphicsMode<DisplaySize128x64>,
+        BufferedGraphicsModeAsync<DisplaySize128x64>,
     >,
     state: Arc<State>,
 ) {
-    display.init().unwrap();
+    display.init().await.unwrap();
     log::info!("display init ok");
 
     let text_style_data = embedded_graphics::mono_font::MonoTextStyleBuilder::new()
@@ -222,7 +222,11 @@ pub async fn display_loop<'a>(
         .draw(&mut display)
         .unwrap();
 
-        display.flush().unwrap();
+        // transient bus errors (nack, timeout) fix themselves on the next frame, a
+        // glitched display is not worth rebooting mid flight log
+        if let Err(e) = display.flush().await {
+            log::warn!("display flush failed: {e:?}");
+        }
         Timer::after(Duration::from_millis(200)).await
     }
 }

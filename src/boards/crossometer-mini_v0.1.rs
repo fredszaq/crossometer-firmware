@@ -1,18 +1,18 @@
 use crate::buzzer::BuzzerDriver;
+#[cfg(not(feature = "no-display"))]
+use crate::i2c_async::AsyncI2cDriver;
 use bme280::spi::AsyncBME280;
 use embedded_sdmmc::asynchronous::SdCard;
-#[cfg(not(feature = "no-display"))]
-use esp_idf_hal::i2c::I2cDriver;
 use esp_idf_hal::ledc::LowSpeed;
 use esp_idf_hal::spi::{SpiDeviceDriver, SpiDriver};
 use esp_idf_hal::uart::{AsyncUartDriver, UartDriver};
 use esp_idf_hal::units::Hertz;
 #[cfg(not(feature = "no-display"))]
-use ssd1306::mode::BufferedGraphicsMode;
+use ssd1306::mode::BufferedGraphicsModeAsync;
 #[cfg(not(feature = "no-display"))]
 use ssd1306::prelude::{DisplaySize128x64, I2CInterface};
 #[cfg(not(feature = "no-display"))]
-use ssd1306::Ssd1306;
+use ssd1306::Ssd1306Async;
 
 pub struct Board<'a> {
     pub gps: AsyncUartDriver<'a, UartDriver<'a>>,
@@ -20,10 +20,10 @@ pub struct Board<'a> {
     pub modem: esp_idf_hal::modem::Modem<'a>,
     pub barometer: AsyncBME280<SpiDeviceDriver<'a, SpiDriver<'a>>>,
     #[cfg(not(feature = "no-display"))]
-    pub display: Ssd1306<
-        I2CInterface<I2cDriver<'a>>,
+    pub display: Ssd1306Async<
+        I2CInterface<AsyncI2cDriver<'a>>,
         DisplaySize128x64,
-        BufferedGraphicsMode<DisplaySize128x64>,
+        BufferedGraphicsModeAsync<DisplaySize128x64>,
     >,
     pub sdcard: SdCard<SpiDeviceDriver<'a, SpiDriver<'a>>, embassy_time::Delay>,
     pub buzzer: BuzzerDriver<'a, LowSpeed>,
@@ -63,12 +63,14 @@ impl Board<'_> {
 
         let buzzer = BuzzerDriver::new(buzzer_timer, buzzer_channel, buzzer_pin);
 
+        // 0x3C is the address ssd1306::I2CDisplayInterface::new below binds to
         #[cfg(not(feature = "no-display"))]
-        let i2c_ssd1306 = I2cDriver::new(
+        let i2c_ssd1306 = AsyncI2cDriver::new(
             i2c_ssd1306,
             i2c_ssd1306_sda,
             i2c_ssd1306_scl,
-            &esp_idf_hal::i2c::config::Config::new().baudrate(Hertz(100_000)),
+            0x3C,
+            Hertz(100_000),
         )
         .unwrap();
 
@@ -103,7 +105,7 @@ impl Board<'_> {
         let ssd1306 = {
             let ssd1306_display_interface = ssd1306::I2CDisplayInterface::new(i2c_ssd1306);
 
-            ssd1306::Ssd1306::new(
+            Ssd1306Async::new(
                 ssd1306_display_interface,
                 DisplaySize128x64,
                 DisplayRotation::Rotate0,
