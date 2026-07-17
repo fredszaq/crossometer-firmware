@@ -1,34 +1,76 @@
 use crate::config;
+use crate::gps::GpsMeasurement;
 use crate::state::State;
+use anyhow::anyhow;
 use embassy_time::{Duration, Timer};
 use embedded_sdmmc::asynchronous::{
     BlockDevice, File, Mode, SdCard, TimeSource, VolumeIdx, VolumeManager,
 };
 use esp_idf_hal::spi::{SpiDeviceDriver, SpiDriver};
+use futures::{pin_mut, select, FutureExt, StreamExt};
 use igc_parser::records::file_header::FileHeader;
 use igc_parser::records::fix::Fix;
 use igc_parser::records::flight_recorder_id::FlightRecorderID;
 use igc_parser::records::Record;
+use nmea_parser::chrono::Timelike;
 use std::fmt::{Display, Formatter};
+use std::ops::DerefMut;
 use std::rc::Rc;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
+
+#[derive(Copy, Clone, Debug, PartialEq)]
+pub enum SdCardStatus {
+    WaitingForGpsFix,
+    Logging { file_id: i32 },
+    Error,
+}
 
 pub async fn sdcard_loop<'a>(
     sdcard: SdCard<SpiDeviceDriver<'a, SpiDriver<'a>>, embassy_time::Delay>,
     state: Arc<State>,
 ) {
+    update_status(&state, SdCardStatus::WaitingForGpsFix);
+
     while state.current_satellite_count.load(Ordering::Relaxed) == 0 {
         log::info!("waiting for GPS to get a fix before opening sdcard");
         Timer::after(Duration::from_secs(1)).await;
     }
 
-    let volume_manager = VolumeManager::new(sdcard, &*state);
-    let volume0 = volume_manager
-        .open_volume(VolumeIdx(0))
-        .await
-        .expect("could not open sdcard volume 0, is the sdcard properly formatted?");
-    let root_dir = volume0.open_root_dir().unwrap();
+    if let Err(e) = log_igc_loop(sdcard, &state).await {
+        log::error!("sdcard logging stopped: {e}");
+        update_status(&state, SdCardStatus::Error);
+    }
+}
+
+fn update_status(state: &State, status: SdCardStatus) {
+    log::info!("sdcard status: {status:?}");
+    state.sdcard_status.sender().send(status);
+}
+
+async fn log_igc_loop<'a>(
+    sdcard: SdCard<SpiDeviceDriver<'a, SpiDriver<'a>>, embassy_time::Delay>,
+    state: &Arc<State>,
+) -> anyhow::Result<()> {
+    let volume_manager = VolumeManager::new(sdcard, &**state);
+    // card init is flaky (intermittent UnexpectedResponse at boot) but usually works on a
+    // later attempt: keep retrying instead of giving up on logging for the whole flight
+    let volume0 = loop {
+        match volume_manager.open_volume(VolumeIdx(0)).await {
+            Ok(volume0) => break volume0,
+            Err(e) => {
+                log::error!(
+                    "could not open sdcard volume 0 ({e:?}), retrying in 5s, \
+                     is the sdcard properly formatted?"
+                );
+                update_status(state, SdCardStatus::Error);
+                Timer::after(Duration::from_secs(5)).await;
+            }
+        }
+    };
+    let root_dir = volume0
+        .open_root_dir()
+        .map_err(|e| anyhow!("could not open root dir: {e:?}"))?;
 
     // embedded-sdmmc only supports 8.3 filenames, and date is not reliable when gps is starting
     // so filenames are just XCM00001.igc, XCM00002.igc, etc. Let's find the first one that does
@@ -53,7 +95,9 @@ pub async fn sdcard_loop<'a>(
     let file = root_dir
         .open_file_in_dir(filename.as_str(), Mode::ReadWriteCreateOrAppend)
         .await
-        .expect("could not open file");
+        .map_err(|e| anyhow!("could not open file {filename}: {e:?}"))?;
+
+    update_status(state, SdCardStatus::Logging { file_id });
 
     // see https://www.fai.org/sites/default/files/igc_specification_dec_2024_with_al9.pdf for
     // the igc file format specification
@@ -81,83 +125,97 @@ pub async fn sdcard_loop<'a>(
             extension: rcstr(""),
         }),
     )
-    .await;
+    .await?;
 
     write(
         &file,
         Record::H(FileHeader::PilotInCharge(rcstr(config::PILOT_IN_CHARGE))),
     )
-    .await;
+    .await?;
 
-    write(&file, Record::H(FileHeader::SecondPilot(rcstr("Nil")))).await;
+    write(&file, Record::H(FileHeader::SecondPilot(rcstr("Nil")))).await?;
 
     write(
         &file,
         Record::H(FileHeader::GliderType(rcstr(config::GLIDER_TYPE))),
     )
-    .await;
+    .await?;
 
     write(
         &file,
         Record::H(FileHeader::GliderID(rcstr(config::GLIDER_ID))),
     )
-    .await;
+    .await?;
 
-    write(&file, Record::H(FileHeader::GPSDatum(rcstr("WGS84")))).await;
+    write(&file, Record::H(FileHeader::GPSDatum(rcstr("WGS84")))).await?;
 
     write(
         &file,
         Record::H(FileHeader::Firmware(rcstr(env!("CARGO_PKG_VERSION")))),
     )
-    .await;
+    .await?;
 
-    write(&file, Record::H(FileHeader::Hardware(rcstr("0.1")))).await;
+    write(&file, Record::H(FileHeader::Hardware(rcstr("0.1")))).await?;
 
     write(
         &file,
         Record::H(FileHeader::LoggerType(rcstr("Crossometer Mini"))),
     )
-    .await;
+    .await?;
 
     write(
         &file,
         Record::H(FileHeader::GPSManufacturer(rcstr("UBLOX,UBX-M8030-KT"))),
     )
-    .await;
+    .await?;
     write(
         &file,
         Record::H(FileHeader::PressureSensor(rcstr("BOSCH,BMP280"))),
     )
-    .await;
+    .await?;
 
-    loop {
-        let altitude_gps_m = state.current_altitude_gps_m.load(Ordering::Acquire);
-        let altitude_baro_uncalibrated_mm = state
-            .current_altitude_baro_uncalibrated_mm
-            .load(Ordering::Relaxed);
+    let mut barometer_measurements = state.barometer_measurements.subscriber().unwrap();
+    let barometer_measurements = barometer_measurements.deref_mut().fuse();
+    pin_mut!(barometer_measurements);
 
-        let latitude = state.current_lat_x10_000_000.load(Ordering::Relaxed);
-        let longitude = state.current_lon_x10_000_000.load(Ordering::Relaxed);
+    let mut gps_measurements = state.gps_measurements.subscriber().unwrap();
+    let gps_measurements = gps_measurements.deref_mut().fuse();
+    pin_mut!(gps_measurements);
 
-        fn to_dms<T: Into<f64>>(value_x10_000_000: T) -> (u8, f32, bool) {
-            let value = value_x10_000_000.into() / 10_000_000.0;
-            let is_positive = value >= 0.0;
-            let abs_value = value.abs();
-            let degrees = abs_value.trunc() as u8;
-            let minutes = ((abs_value - degrees as f64) * 60.0) as f32;
-            (degrees, minutes, is_positive)
-        }
-
+    fn to_dms<T: Into<f64>>(value: T) -> (u8, f32, bool) {
+        let value = value.into();
+        let is_positive = value >= 0.0;
+        let abs_value = value.abs();
+        let degrees = abs_value.trunc() as u8;
+        let minutes = ((abs_value - degrees as f64) * 60.0) as f32;
+        (degrees, minutes, is_positive)
+    }
+    async fn write_b_record<
+        'a,
+        D: BlockDevice,
+        T: TimeSource,
+        const MAX_DIRS: usize,
+        const MAX_FILES: usize,
+        const MAX_VOLUMES: usize,
+    >(
+        file: &File<'a, D, T, MAX_DIRS, MAX_FILES, MAX_VOLUMES>,
+        latitude: f64,
+        longitude: f64,
+        altitude_m: Option<i16>,
+        pressure_altitude_m: i16,
+        state: &Arc<State>,
+    ) -> anyhow::Result<()> {
         let (latitude_degrees, latitude_minutes, is_north) = to_dms(latitude);
         let (longitude_degrees, longitude_minutes, is_east) = to_dms(longitude);
+        let date = { state.time_source.lock().await.now() };
 
         write(
-            &file,
+            file,
             Record::B(Fix {
                 timestamp: igc_parser::records::util::Time {
-                    h: state.current_hours.load(Ordering::Relaxed),
-                    m: state.current_minutes.load(Ordering::Relaxed),
-                    s: state.current_seconds.load(Ordering::Relaxed),
+                    h: date.hour() as u8,
+                    m: date.minute() as u8,
+                    s: date.second() as u8,
                 },
                 coordinates: igc_parser::records::util::Coordinate {
                     latitude: igc_parser::records::util::Latitude {
@@ -171,15 +229,57 @@ pub async fn sdcard_loop<'a>(
                         is_east,
                     },
                 },
-                pressure_alt: (altitude_baro_uncalibrated_mm / 1000) as i16,
-                gps_alt: Some(altitude_gps_m as i16),
+                pressure_alt: pressure_altitude_m,
+                gps_alt: altitude_m,
                 extension: Rc::from(String::new().into_boxed_str()),
             }),
         )
-        .await;
+        .await
+    }
 
-        file.flush().await.unwrap();
-        Timer::after(Duration::from_secs(1)).await;
+    let mut pressure_altitude_m = 0;
+    let mut last_gps: Option<GpsMeasurement> = None;
+    let mut last_record_time = embassy_time::Instant::now();
+
+    loop {
+        select! {
+            baro = barometer_measurements.next() => {
+                pressure_altitude_m = baro.unwrap().altitude_uncalibrated_m as i16;
+            },
+            gps = gps_measurements.next() => {
+                let gps = gps.unwrap();
+                write_b_record(&file,
+                    gps.latitude,
+                    gps.longitude,
+                    Some(gps.altitude_m as i16),
+                    pressure_altitude_m,
+                    state)
+                .await?;
+                last_gps = Some(gps);
+                last_record_time = embassy_time::Instant::now();
+
+            },
+            _ = Timer::at(last_record_time + Duration::from_secs(2)).fuse()  => {
+                // we should have a gps point every second, but if we don't, we should continue to
+                // write barometric altitude. Reuse the last known fix's lat/lon so the track
+                // doesn't jump to Null Island; mark the record as invalid (gps_alt = None → 'V').
+                let (lat, lon) = last_gps
+                    .map(|g| (g.latitude, g.longitude))
+                    .unwrap_or((0.0, 0.0));
+                write_b_record(&file,
+                    lat,
+                    lon,
+                    None,
+                    pressure_altitude_m,
+                    state)
+                .await?;
+                last_record_time = embassy_time::Instant::now();
+            }
+        }
+
+        file.flush()
+            .await
+            .map_err(|e| anyhow!("cannot flush file: {e:?}"))?;
     }
 }
 
@@ -193,7 +293,7 @@ async fn write<
 >(
     file: &File<'a, D, T, MAX_DIRS, MAX_FILES, MAX_VOLUMES>,
     record: Record,
-) {
+) -> anyhow::Result<()> {
     struct RecordWrapper(Record);
 
     impl Display for RecordWrapper {
@@ -208,7 +308,7 @@ async fn write<
 
     file.write(to_write.as_bytes())
         .await
-        .expect("cannot write to file");
+        .map_err(|e| anyhow!("cannot write to file: {e:?}"))
 }
 
 trait IgcPrint {
@@ -252,7 +352,11 @@ impl IgcPrint for Fix {
     fn print(&self, formatter: &mut Formatter) -> std::fmt::Result {
         self.timestamp.print(formatter)?;
         self.coordinates.print(formatter)?;
-        write!(formatter, "A")?; // hardcode the fact that we have a gps altitude fix for now
+        if self.gps_alt.is_some() {
+            write!(formatter, "A")?;
+        } else {
+            write!(formatter, "V")?;
+        }
         write!(formatter, "{:05}", self.pressure_alt)?;
         write!(formatter, "{:05}", self.gps_alt.unwrap_or(0))
     }

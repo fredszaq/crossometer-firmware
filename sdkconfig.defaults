@@ -11,3 +11,9 @@ CONFIG_ESP_MAIN_TASK_STACK_SIZE=16000
 
 # enable async spi in Rust
 CONFIG_SPI_MASTER_ISR_IN_IRAM=n
+
+# cap the wifi TX power at the PHY level (dBm), this also applies to the calibration burst
+# at radio power-on which can brown out the 5V rail when powered over USB (the client sits
+# half a meter away in the cockpit anyway, we don't need range). 10 is the Kconfig minimum,
+# the runtime esp_wifi_set_max_tx_power call in wifi.rs caps further
+CONFIG_ESP_PHY_MAX_WIFI_TX_POWER=10

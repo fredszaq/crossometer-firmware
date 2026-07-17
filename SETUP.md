@@ -18,7 +18,7 @@ libusb python-virtualenv libxml2-legacy`
 
 - `. ~/export-esp.sh` (once per terminal)
 - `cargo +esp check`
-- `cargo +esp espflash flash --no-stub --monitor` or `cargo run` as toolchain is set in `rust-toolchain.toml` and runner
+- `cargo +esp espflash flash --monitor` or `cargo run` as toolchain is set in `rust-toolchain.toml` and runner
   is set in `.cargo/config.toml`
 
 ## Tips

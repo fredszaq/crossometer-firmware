@@ -1,3 +1,10 @@
 pub const PILOT_IN_CHARGE: &str = "Pilot";
 pub const GLIDER_TYPE: &str = "SuperGlider";
 pub const GLIDER_ID: &str = "1234";
+
+// wifi access point serving the NMEA stream, password must be at least 8 chars
+// (an empty password makes the access point open)
+#[cfg(feature = "wifi")]
+pub const WIFI_SSID: &str = "crossometer";
+#[cfg(feature = "wifi")]
+pub const WIFI_PASSWORD: &str = "crossometer";
