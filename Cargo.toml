@@ -23,6 +23,7 @@ silent = []
 fake-gps = []
 wifi = []
 print-free-stack = []
+verbose = []
 # diagnostic: don't install the i2c driver / display at all (suspected i2c interrupt storm)
 no-display = []
 crossometer-mini-v0-1 = []

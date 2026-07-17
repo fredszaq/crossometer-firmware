@@ -77,6 +77,7 @@ pub async fn beep_loop<S: SpeedMode>(state: Arc<State>, mut buzzer: BuzzerDriver
     loop {
         let altitude_change_mms = state.current_altitude_change_mms.load(Ordering::Acquire);
         let freq = altitude_change_to_freq(altitude_change_mms);
+        #[cfg(feature = "verbose")]
         println!(
             "buzzer_loop: change={} freq={:?}",
             altitude_change_mms,
